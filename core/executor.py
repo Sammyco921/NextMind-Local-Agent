@@ -1,59 +1,60 @@
-import json
-from tools.tool_registry import TOOL_REGISTRY
+from typing import Dict, Any
 
 
 class Executor:
     """
-    Executes individual task steps using registered tools.
+    Schema-safe executor.
+
+    Rules:
+    - NEVER trust planner output
+    - ToolRegistry is the ONLY authority
+    - Fail fast on any mismatch
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, tool_registry):
+        self.tool_registry = tool_registry
 
-    def execute(self, step: dict) -> dict:
-        """
-        Execute a single planned step.
+    # ----------------------------------------------------
+    # EXECUTE SINGLE STEP
+    # ----------------------------------------------------
+    def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
 
-        Expected step format:
-        {
-            "id": 1,
-            "tool": "write_file",
-            "args": {
-                ...
-            }
-        }
-
-        Returns:
-            dict: Execution result
-        """
-
-        step_id = step.get("id")
         tool_name = step.get("tool")
         args = step.get("args", {})
 
-        # --------------------------------------------------------
-        # Validate tool existence
-        # --------------------------------------------------------
-
-        if tool_name not in TOOL_REGISTRY:
+        # -----------------------------
+        # 1. TOOL EXISTS CHECK
+        # -----------------------------
+        if tool_name not in self.tool_registry.tools:
             return {
-                "step_id": step_id,
                 "status": "fail",
                 "output": None,
-                "error": f"Tool '{tool_name}' is not registered."
+                "error": f"Unknown tool: {tool_name}"
             }
 
-        tool_function = TOOL_REGISTRY[tool_name]
+        tool_meta = self.tool_registry.tools[tool_name]
+        schema = tool_meta["args_schema"]
 
-        # --------------------------------------------------------
-        # Execute tool safely
-        # --------------------------------------------------------
-
+        # -----------------------------
+        # 2. STRICT ARG VALIDATION
+        # -----------------------------
         try:
-            result = tool_function(**args)
+            self.tool_registry.validate_args(tool_name, args)
+        except Exception as e:
+            return {
+                "status": "fail",
+                "output": None,
+                "error": f"Schema validation failed: {str(e)}"
+            }
+
+        # -----------------------------
+        # 3. EXECUTE TOOL
+        # -----------------------------
+        try:
+            func = tool_meta["func"]
+            result = func(**args)
 
             return {
-                "step_id": step_id,
                 "status": "success",
                 "output": result,
                 "error": None
@@ -61,8 +62,23 @@ class Executor:
 
         except Exception as e:
             return {
-                "step_id": step_id,
                 "status": "fail",
                 "output": None,
-                "error": str(e)
+                "error": f"Execution error: {str(e)}"
             }
+
+    # ----------------------------------------------------
+    # OPTIONAL: BATCH EXECUTION SUPPORT
+    # ----------------------------------------------------
+    def execute_plan(self, plan: Dict[str, Any]):
+
+        results = []
+
+        for step in plan.get("steps", []):
+            result = self.execute_step(step)
+            results.append({
+                "step": step,
+                "result": result
+            })
+
+        return results
