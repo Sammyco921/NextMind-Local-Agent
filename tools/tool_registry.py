@@ -1,53 +1,104 @@
-from tools.file_tools import write_file, read_file, list_dir
+from typing import Dict, Any, Callable
 
 
-"""
-Tool Registry for NextMind
-
-This is the single source of truth for all tools
-available to the Executor and Planner.
-
-Rules:
-- Every tool must be explicitly registered here
-- No dynamic execution allowed
-- No hidden capabilities
-"""
-
-
-TOOL_REGISTRY = {
-    # ========================================================
-    # FILE SYSTEM TOOLS
-    # ========================================================
-
-    "write_file": write_file,
-    "read_file": read_file,
-    "list_dir": list_dir,
-}
-
-
-def get_tool(name: str):
+class ToolRegistry:
     """
-    Safe tool lookup.
-
-    Args:
-        name (str): Tool name
-
-    Returns:
-        callable: Tool function
-
-    Raises:
-        KeyError: If tool does not exist
+    Schema-aware tool registry (typed version).
     """
 
-    if name not in TOOL_REGISTRY:
-        raise KeyError(f"Tool not found: {name}")
+    def __init__(self):
+        self.tools: Dict[str, Dict[str, Any]] = {}
 
-    return TOOL_REGISTRY[name]
+    # -------------------------------------------------
+    # REGISTER TOOL
+    # -------------------------------------------------
+    def register(
+        self,
+        name: str,
+        func: Callable,
+        args_schema: Dict[str, str],
+        description: str = ""
+    ):
+        """
+        args_schema format:
+        {
+            "filename": "str",
+            "content": "str"
+        }
+        """
 
+        self.tools[name] = {
+            "func": func,
+            "args_schema": args_schema,
+            "description": description
+        }
 
-def list_tools() -> list:
-    """
-    Return list of available tool names.
-    """
+    # -------------------------------------------------
+    # GET TOOL
+    # -------------------------------------------------
+    def get(self, name: str) -> Callable:
+        if name not in self.tools:
+            raise ValueError(f"Unknown tool: {name}")
 
-    return list(TOOL_REGISTRY.keys())
+        return self.tools[name]["func"]
+
+    # -------------------------------------------------
+    # VALIDATE ARGS (STRICT)
+    # -------------------------------------------------
+    def validate_args(self, name: str, args: dict):
+
+        if name not in self.tools:
+            raise ValueError(f"Unknown tool: {name}")
+
+        schema = self.tools[name]["args_schema"]
+
+        # required keys
+        for key in schema.keys():
+            if key not in args:
+                raise ValueError(f"{name} missing required arg: {key}")
+
+        # reject unknown args
+        for key in args:
+            if key not in schema:
+                raise ValueError(f"{name} got unexpected arg: {key}")
+
+        return True
+
+    # -------------------------------------------------
+    # EXECUTE TOOL
+    # -------------------------------------------------
+    def run(self, name: str, args: dict):
+
+        if name not in self.tools:
+            return {"status": "fail", "error": f"Unknown tool: {name}"}
+
+        try:
+            self.validate_args(name, args)
+
+            func = self.tools[name]["func"]
+            result = func(**args)
+
+            return {
+                "status": "success",
+                "output": result,
+                "error": None
+            }
+
+        except Exception as e:
+            return {
+                "status": "fail",
+                "output": None,
+                "error": str(e)
+            }
+
+    # -------------------------------------------------
+    # DEBUG HELP
+    # -------------------------------------------------
+    def list_tools(self):
+        return {
+            name: {
+                "args": meta["args_schema"],
+                "description": meta["description"]
+            }
+            for name, meta in self.tools.items()
+        }
