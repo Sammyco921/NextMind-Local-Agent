@@ -1,190 +1,152 @@
 import json
+from typing import Dict, Any, List
 
+from pydantic import BaseModel, ValidationError
 from core.llm import call_llm
 
 
-PLANNER_SYSTEM_PROMPT = """
-You are the Planner in an AI agent system.
+# ====================================================
+# Pydantic Schemas (STRICT OUTPUT CONTRACT)
+# ====================================================
 
-Your job is to convert a user goal into a clear,
-minimal step-by-step executable plan.
+class PlanStep(BaseModel):
+    id: int
+    tool: str
+    args: Dict[str, Any]
 
-Rules:
-- Break tasks into small executable steps
-- Use ONLY available tools
-- Do NOT execute steps yourself
-- Do NOT explain reasoning
-- Prefer simple solutions
-- Every step must include:
-    - id
-    - tool
-    - args
 
-Available tools:
-- write_file
-- read_file
-- list_dir
+class Plan(BaseModel):
+    goal: str
+    steps: List[PlanStep]
 
-Return ONLY valid JSON.
 
-Required JSON format:
-
-{
-  "goal": "...",
-  "steps": [
-    {
-      "id": 1,
-      "tool": "tool_name",
-      "args": {
-        ...
-      }
-    }
-  ]
-}
-"""
-
+# ====================================================
+# PLANNER
+# ====================================================
 
 class Planner:
     """
-    Generates structured execution plans
-    for the Orchestrator.
+    Schema-enforced + self-repairing planner.
+
+    Guarantees:
+    - valid JSON output
+    - valid structure (via Pydantic)
+    - tool schema visibility from registry
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, tool_registry):
+        self.tool_registry = tool_registry
 
-    # ========================================================
-    # CREATE PLAN
-    # ========================================================
+    # ----------------------------------------------------
+    # TOOL CONTEXT BUILDER
+    # ----------------------------------------------------
+    def _build_tool_context(self) -> str:
+        lines = []
 
-    def create_plan(
-        self,
-        goal: str,
-        previous_plan: dict = None
-    ) -> dict:
-        """
-        Generate a structured execution plan.
+        for tool_name, meta in self.tool_registry.tools.items():
+            schema = meta["args_schema"]
 
-        Args:
-            goal (str):
-                User objective.
+            lines.append(f"\nTool: {tool_name}")
 
-            previous_plan (dict, optional):
-                Previous failed plan for replanning.
+            if not schema:
+                lines.append("  args: none")
+                continue
 
-        Returns:
-            dict:
-                Structured plan.
-        """
+            lines.append("  args:")
 
-        prompt = self._build_prompt(
-            goal=goal,
-            previous_plan=previous_plan
-        )
+            for arg_name, arg_type in schema.items():
+                lines.append(f"    - {arg_name}: {arg_type}")
 
-        try:
-            response = call_llm(
-                prompt=prompt,
-                system_prompt=PLANNER_SYSTEM_PROMPT
-            )
+        return "\n".join(lines)
 
-            parsed = json.loads(response)
+    # ----------------------------------------------------
+    # SYSTEM PROMPT
+    # ----------------------------------------------------
+    def _build_prompt(self, goal: str) -> str:
 
-            return self._validate_plan(parsed)
+        tool_context = self._build_tool_context()
 
-        except json.JSONDecodeError:
+        return f"""
+You are a strict planning engine.
 
-            return {
-                "goal": goal,
-                "steps": [],
-                "error": "Planner returned invalid JSON."
-            }
+RULES:
+- Output MUST be valid JSON only
+- Must match schema EXACTLY
+- Only use tools listed below
+- Only use allowed argument names
+- Do NOT invent arguments or tools
 
-        except Exception as e:
+TOOLS:
+{tool_context}
 
-            return {
-                "goal": goal,
-                "steps": [],
-                "error": str(e)
-            }
+OUTPUT FORMAT:
+{{
+  "goal": "...",
+  "steps": [
+    {{
+      "id": 1,
+      "tool": "tool_name",
+      "args": {{
+        "arg": "value"
+      }}
+    }}
+  ]
+}}
 
-    # ========================================================
-    # BUILD PROMPT
-    # ========================================================
-
-    def _build_prompt(
-        self,
-        goal: str,
-        previous_plan: dict = None
-    ) -> str:
-        """
-        Build planner prompt.
-        """
-
-        prompt = f"""
-User Goal:
+GOAL:
 {goal}
+""".strip()
+
+    # ----------------------------------------------------
+    # CREATE PLAN (WITH AUTO REPAIR LOOP)
+    # ----------------------------------------------------
+    def create_plan(self, goal: str, max_retries: int = 2) -> Dict[str, Any]:
+
+        last_error = None
+
+        for attempt in range(max_retries + 1):
+
+            prompt = self._build_prompt(goal)
+
+            # inject repair feedback if needed
+            if last_error:
+                prompt += f"""
+
+PREVIOUS OUTPUT WAS INVALID:
+
+{last_error}
+
+Fix it. Return ONLY valid JSON matching the schema.
 """
 
-        # ----------------------------------------------------
-        # Include failed plan context if replanning
-        # ----------------------------------------------------
+            raw = call_llm(prompt)
 
-        if previous_plan:
+            # -----------------------------
+            # STEP 1: JSON PARSE
+            # -----------------------------
+            try:
+                data = json.loads(raw)
 
-            prompt += f"""
+            except json.JSONDecodeError as e:
+                last_error = f"Invalid JSON: {str(e)}"
+                continue
 
-Previous Plan Failed:
-{json.dumps(previous_plan, indent=2)}
+            # -----------------------------
+            # STEP 2: STRUCTURE VALIDATION
+            # -----------------------------
+            try:
+                plan = Plan(**data)
+                return plan.model_dump()
 
-Generate a corrected plan.
-"""
+            except ValidationError as e:
+                last_error = str(e)
+                continue
 
-        return prompt
-
-    # ========================================================
-    # VALIDATE PLAN
-    # ========================================================
-
-    def _validate_plan(self, plan: dict) -> dict:
-        """
-        Validate planner output structure.
-        """
-
-        if "goal" not in plan:
-            raise ValueError(
-                "Plan missing 'goal' field."
-            )
-
-        if "steps" not in plan:
-            raise ValueError(
-                "Plan missing 'steps' field."
-            )
-
-        if not isinstance(plan["steps"], list):
-            raise ValueError(
-                "'steps' must be a list."
-            )
-
-        # ----------------------------------------------------
-        # Validate each step
-        # ----------------------------------------------------
-
-        for step in plan["steps"]:
-
-            if "id" not in step:
-                raise ValueError(
-                    "Step missing 'id'."
-                )
-
-            if "tool" not in step:
-                raise ValueError(
-                    "Step missing 'tool'."
-                )
-
-            if "args" not in step:
-                raise ValueError(
-                    "Step missing 'args'."
-                )
-
-        return plan
+        # -----------------------------
+        # FAILURE CASE
+        # -----------------------------
+        return {
+            "status": "fail",
+            "error": "Planner failed after max retries",
+            "last_error": last_error
+        }
