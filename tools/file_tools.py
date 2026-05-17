@@ -1,129 +1,57 @@
-from pathlib import Path
+from typing import Dict, Any
+import os
 
-from config.config import TOOL_CONFIG
 
-
-# ============================================================
+# ----------------------------------------------------
 # WRITE FILE
-# ============================================================
-
-def write_file(
-    path: str,
-    content: str
-) -> str:
+# ----------------------------------------------------
+def write_file(filename: str, content: str) -> Dict[str, Any]:
     """
-    Create or overwrite a file safely.
+    Writes content to a file.
     """
 
-    file_path = Path(path)
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
 
-    # --------------------------------------------------------
-    # Validate extension
-    # --------------------------------------------------------
-
-    if (
-        file_path.suffix
-        not in TOOL_CONFIG.ALLOWED_FILE_EXTENSIONS
-    ):
-        raise ValueError(
-            f"File extension '{file_path.suffix}' "
-            f"is not allowed."
-        )
-
-    # --------------------------------------------------------
-    # Validate file size
-    # --------------------------------------------------------
-
-    encoded_size = len(content.encode("utf-8"))
-
-    if (
-        encoded_size >
-        TOOL_CONFIG.MAX_FILE_WRITE_SIZE
-    ):
-        raise ValueError(
-            "Content exceeds maximum allowed file size."
-        )
-
-    # --------------------------------------------------------
-    # Ensure parent directory exists
-    # --------------------------------------------------------
-
-    file_path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    # --------------------------------------------------------
-    # Write file
-    # --------------------------------------------------------
-
-    with open(file_path, "w", encoding="utf-8") as file:
-
-        file.write(content)
-
-    return f"File written successfully: {path}"
+    return {
+        "file": filename,
+        "status": "written",
+        "bytes": len(content)
+    }
 
 
-# ============================================================
+# ----------------------------------------------------
 # READ FILE
-# ============================================================
-
-def read_file(
-    path: str
-) -> str:
+# ----------------------------------------------------
+def read_file(filename: str) -> Dict[str, Any]:
     """
-    Read contents of a file safely.
+    Reads content from a file.
     """
 
-    file_path = Path(path)
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"{filename} does not exist")
 
-    if not file_path.exists():
+    with open(filename, "r", encoding="utf-8") as f:
+        content = f.read()
 
-        raise FileNotFoundError(
-            f"File does not exist: {path}"
-        )
-
-    with open(file_path, "r", encoding="utf-8") as file:
-
-        return file.read()
+    return {
+        "file": filename,
+        "content": content,
+        "bytes": len(content)
+    }
 
 
-# ============================================================
+# ----------------------------------------------------
 # LIST DIRECTORY
-# ============================================================
-
-def list_dir(
-    path: str = "."
-) -> list:
+# ----------------------------------------------------
+def list_dir() -> Dict[str, Any]:
     """
-    List files and directories.
+    Lists current directory contents.
     """
 
-    dir_path = Path(path)
+    items = os.listdir(".")
 
-    if not dir_path.exists():
-
-        raise FileNotFoundError(
-            f"Directory does not exist: {path}"
-        )
-
-    if not dir_path.is_dir():
-
-        raise ValueError(
-            f"Path is not a directory: {path}"
-        )
-
-    items = []
-
-    for item in dir_path.iterdir():
-
-        items.append({
-            "name": item.name,
-            "type": (
-                "directory"
-                if item.is_dir()
-                else "file"
-            )
-        })
-
-    return items
+    return {
+        "items": items,
+        "count": len(items)
+    }
