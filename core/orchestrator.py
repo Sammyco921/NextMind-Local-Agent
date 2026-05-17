@@ -1,196 +1,83 @@
+"""
+NextMind Orchestrator (v1 - strict control flow)
+
+Design goals:
+- NO logic duplication
+- NO schema awareness (delegated downward)
+- NO LLM calls here
+- ONLY coordinates planner → executor → (optional critic)
+"""
+
+from typing import Dict, Any
+
 from core.planner import Planner
 from core.executor import Executor
-from core.critic import Critic
-
-from memory.memory_manager import MemoryManager
-
-from config.config import AGENT_CONFIG
 
 
 class Orchestrator:
     """
-    Central control loop for NextMind.
-
-    Responsibilities:
-    - Receive user goals
-    - Generate plans
-    - Execute steps
-    - Evaluate results
-    - Handle retries/replanning
-    - Store memory
+    Central pipeline controller.
     """
 
-    def __init__(self):
+    def __init__(self, planner: Planner, executor: Executor):
+        self.planner = planner
+        self.executor = executor
 
-        self.planner = Planner()
-        self.executor = Executor()
-        self.critic = Critic()
-        self.memory = MemoryManager()
-
-    # ========================================================
-    # MAIN TASK LOOP
-    # ========================================================
-
-    def run(self, goal: str) -> dict:
+    # -------------------------------------------------
+    # RUN FULL GOAL PIPELINE
+    # -------------------------------------------------
+    def run(self, goal: str) -> Dict[str, Any]:
         """
-        Execute a full task lifecycle.
-
-        Args:
-            goal (str):
-                User objective.
-
-        Returns:
-            dict:
-                Final task result.
+        End-to-end execution of a user goal.
         """
 
-        print(f"\n[NextMind] Goal Received:")
-        print(f"→ {goal}\n")
-
-        replan_count = 0
-
-        # ----------------------------------------------------
-        # Initial planning
-        # ----------------------------------------------------
-
+        # -------------------------------------------------
+        # STEP 1: PLAN
+        # -------------------------------------------------
         plan = self.planner.create_plan(goal)
 
-        if "steps" not in plan:
-            return self._fail_task(
-                "Planner failed to generate valid steps."
-            )
+        if not plan or "steps" not in plan:
+            return {
+                "status": "fail",
+                "goal": goal,
+                "error": plan.get("error", "Invalid plan"),
+                "plan": plan
+            }
 
-        # ----------------------------------------------------
-        # Main execution loop
-        # ----------------------------------------------------
+        results = []
 
-        while replan_count <= AGENT_CONFIG.MAX_REPLANS_PER_TASK:
+        # -------------------------------------------------
+        # STEP 2: EXECUTE STEP BY STEP
+        # -------------------------------------------------
+        for step in plan["steps"]:
 
-            all_steps_passed = True
+            execution_result = self.executor.execute_step(step)
+            results.append(execution_result)
 
-            for step in plan["steps"]:
+            print("\n[Planner Step]")
+            print(step)
 
-                print(f"\n[Planner Step]")
-                print(step)
+            print("\n[Execution Result]")
+            print(execution_result)
 
-                retry_count = 0
-
-                # --------------------------------------------
-                # Retry loop for a single step
-                # --------------------------------------------
-
-                while retry_count < AGENT_CONFIG.MAX_RETRIES_PER_STEP:
-
-                    # ----------------------------------------
-                    # Execute step
-                    # ----------------------------------------
-
-                    execution_result = self.executor.execute(step)
-
-                    print(f"\n[Execution Result]")
-                    print(execution_result)
-
-                    # ----------------------------------------
-                    # Critic evaluation
-                    # ----------------------------------------
-
-                    critic_result = self.critic.evaluate(
-                        step=str(step),
-                        execution_result=execution_result
-                    )
-
-                    print(f"\n[Critic Result]")
-                    print(critic_result)
-
-                    # ----------------------------------------
-                    # Success path
-                    # ----------------------------------------
-
-                    if critic_result["status"] == "pass":
-
-                        self.memory.store_step_result(
-                            goal=goal,
-                            step=step,
-                            result=execution_result
-                        )
-
-                        break
-
-                    # ----------------------------------------
-                    # Failure path
-                    # ----------------------------------------
-
-                    retry_count += 1
-
-                    print(
-                        f"\n[Retry Attempt "
-                        f"{retry_count}/"
-                        f"{AGENT_CONFIG.MAX_RETRIES_PER_STEP}]"
-                    )
-
-                # --------------------------------------------
-                # Step ultimately failed
-                # --------------------------------------------
-
-                if retry_count >= AGENT_CONFIG.MAX_RETRIES_PER_STEP:
-
-                    print("\n[Step Failed] Replanning required.")
-
-                    all_steps_passed = False
-                    break
-
-            # ------------------------------------------------
-            # Entire task completed successfully
-            # ------------------------------------------------
-
-            if all_steps_passed:
-
-                self.memory.store_task_summary(
-                    goal=goal,
-                    plan=plan
-                )
-
+            # -------------------------------------------------
+            # STOP ON FAILURE (IMPORTANT FOR STABILITY)
+            # -------------------------------------------------
+            if execution_result["status"] == "fail":
                 return {
-                    "status": "success",
+                    "status": "fail",
                     "goal": goal,
-                    "plan": plan
+                    "plan": plan,
+                    "results": results,
+                    "failed_step": step
                 }
 
-            # ------------------------------------------------
-            # Replan logic
-            # ------------------------------------------------
-
-            replan_count += 1
-
-            print(
-                f"\n[Replanning "
-                f"{replan_count}/"
-                f"{AGENT_CONFIG.MAX_REPLANS_PER_TASK}]"
-            )
-
-            plan = self.planner.create_plan(
-                goal=goal,
-                previous_plan=plan
-            )
-
-        # ----------------------------------------------------
-        # Task failed permanently
-        # ----------------------------------------------------
-
-        return self._fail_task(
-            "Maximum replans exceeded."
-        )
-
-    # ========================================================
-    # FAILURE HANDLER
-    # ========================================================
-
-    def _fail_task(self, reason: str) -> dict:
-        """
-        Standardized failure response.
-        """
-
+        # -------------------------------------------------
+        # STEP 3: SUCCESS OUTPUT
+        # -------------------------------------------------
         return {
-            "status": "fail",
-            "reason": reason
+            "status": "success",
+            "goal": goal,
+            "plan": plan,
+            "results": results
         }
