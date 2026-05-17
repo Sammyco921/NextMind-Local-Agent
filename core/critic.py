@@ -1,86 +1,53 @@
-import json
-from core.llm import call_llm
-
-
-CRITIC_PROMPT = """
-You are the Critic in an AI agent system.
-
-Your job is to evaluate execution results against the original step.
-
-Rules:
-- Be strict and objective
-- Detect incomplete or incorrect outputs
-- Suggest fixes when needed
-- Do NOT execute tasks yourself
-- Keep responses concise
-- Return ONLY valid JSON
-
-Required JSON format:
-
-{
-  "status": "pass | fail",
-  "reason": "...",
-  "fix_suggestion": "..."
-}
 """
+NextMind Critic (v0)
+
+Design principle:
+- NO LLM
+- NO subjective evaluation
+- ONLY structural + execution validation
+
+The critic answers one question:
+→ Did the tool call succeed or fail?
+"""
+
+from typing import Dict, Any
 
 
 class Critic:
-    """
-    Evaluates executor output against the intended task step.
-    """
 
-    def __init__(self):
-        pass
+    def evaluate_step(
+        self,
+        step: Dict[str, Any],
+        execution_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
 
-    def evaluate(self, step: str, execution_result: dict) -> dict:
         """
-        Evaluate whether a step was completed successfully.
-
-        Args:
-            step (str): Original planned step
-            execution_result (dict): Output from executor
-
-        Returns:
-            dict: Critic evaluation result
+        Deterministic evaluation of tool execution.
         """
 
-        prompt = f"""
-{CRITIC_PROMPT}
+        step_id = step.get("id")
 
-Original Step:
-{step}
+        status = execution_result.get("status")
+        error = execution_result.get("error")
 
-Execution Result:
-{json.dumps(execution_result, indent=2)}
+        # ----------------------------------------------------
+        # Success cases (strict + fallback safe)
+        # ----------------------------------------------------
 
-Evaluate the execution result.
-"""
-
-        try:
-            response = call_llm(prompt)
-
-            parsed = json.loads(response)
-
+        if status == "success" and error is None:
             return {
-                "status": parsed.get("status", "fail"),
-                "reason": parsed.get("reason", "No reason provided."),
-                "fix_suggestion": parsed.get(
-                    "fix_suggestion",
-                    "No fix suggestion provided."
-                )
+                "status": "pass",
+                "step_id": step_id,
+                "reason": None
             }
 
-        except json.JSONDecodeError:
-            return {
-                "status": "fail",
-                "reason": "Critic returned invalid JSON.",
-                "fix_suggestion": "Retry evaluation with stricter formatting."
-            }
+        # ----------------------------------------------------
+        # Failure / ambiguous cases
+        # ----------------------------------------------------
 
-        except Exception as e:
-            return {
-                "status": "fail",
-                "reason": f"Critic system error: {str(e)}",
-                "fix_suggestion": "Check LLM connection or prompt formatting."
-            }
+        return {
+            "status": "fail",
+            "step_id": step_id,
+            "reason": error or "Execution did not succeed",
+            "fix_suggestion": "Check tool arguments, tool implementation, and executor mapping."
+        }
