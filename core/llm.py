@@ -1,90 +1,118 @@
+import re
 import json
 import requests
 
-from config.config import OLLAMA_CONFIG
 
+# ====================================================
+# JSON EXTRACTION LAYER (ROBUST)
+# ====================================================
 
-class LLMError(Exception):
+def _extract_json(text: str) -> str:
     """
-    Custom exception for LLM-related failures.
-    """
-    pass
+    Extract JSON from messy LLM outputs.
 
-
-def call_llm(prompt: str, system_prompt: str = None) -> str:
-    """
-    Send a prompt to the local Ollama model and return the response.
-
-    Args:
-        prompt (str):
-            User/task prompt sent to the model.
-
-        system_prompt (str, optional):
-            Optional system instruction layer.
-
-    Returns:
-        str:
-            Model response text.
-
-    Raises:
-        LLMError:
-            If request fails or response is malformed.
+    Handles:
+    - ```json blocks
+    - ``` generic blocks
+    - embedded explanations
+    - partial JSON fallback
     """
 
-    url = (
-        f"{OLLAMA_CONFIG.BASE_URL}"
-        f"{OLLAMA_CONFIG.GENERATE_ENDPOINT}"
-    )
+    if not text:
+        raise ValueError("Empty LLM response")
 
-    payload = {
-        "model": OLLAMA_CONFIG.MODEL,
-        "prompt": prompt,
-        "stream": OLLAMA_CONFIG.STREAM,
-        "options": {
-            "temperature": OLLAMA_CONFIG.TEMPERATURE
-        }
-    }
+    text = text.strip()
 
-    # --------------------------------------------------------
-    # Optional system prompt injection
-    # --------------------------------------------------------
+    # -----------------------------
+    # Case 1: ```json ... ```
+    # -----------------------------
+    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
 
-    if system_prompt:
-        payload["system"] = system_prompt
+    # -----------------------------
+    # Case 2: ``` ... ```
+    # -----------------------------
+    match = re.search(r"```(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
 
-    # --------------------------------------------------------
-    # Send request
-    # --------------------------------------------------------
+    # -----------------------------
+    # Case 3: best-effort JSON block
+    # (take last valid-looking object)
+    # -----------------------------
+    candidates = re.findall(r"\{.*?\}", text, re.DOTALL)
+    if candidates:
+        return candidates[-1].strip()
+
+    return text
+
+
+# ====================================================
+# MAIN LLM CALL (OLLAMA)
+# ====================================================
+
+def call_llm(prompt: str) -> str:
+    """
+    Calls local Ollama model and returns CLEAN JSON string.
+    """
+
+    raw_output = _raw_llm_call(prompt)
+
+    cleaned = _extract_json(raw_output)
+
+    # -----------------------------
+    # HARD VALIDATION CHECK
+    # -----------------------------
+    try:
+        json.loads(cleaned)
+    except Exception as e:
+        raise ValueError(
+            "LLM did not return valid JSON after cleanup.\n"
+            f"Error: {str(e)}\n\nRAW OUTPUT:\n{raw_output}"
+        )
+
+    return cleaned
+
+
+# ====================================================
+# OLLAMA BACKEND
+# ====================================================
+
+def _raw_llm_call(prompt: str) -> str:
 
     try:
+
         response = requests.post(
-            url,
-            json=payload,
-            timeout=OLLAMA_CONFIG.TIMEOUT
+
+            "http://localhost:11434/api/chat",
+
+            json={
+
+                "model": "llama3.2:latest",
+
+                "messages": [
+
+                    {"role": "system", "content": "Return ONLY valid JSON."},
+
+                    {"role": "user", "content": prompt}
+
+                ],
+
+                "stream": False
+
+            },
+
+            timeout=60
+
         )
 
         response.raise_for_status()
 
-    except requests.exceptions.RequestException as e:
-        raise LLMError(f"Ollama request failed: {str(e)}")
-
-    # --------------------------------------------------------
-    # Parse response
-    # --------------------------------------------------------
-
-    try:
         data = response.json()
 
-    except json.JSONDecodeError:
-        raise LLMError("Invalid JSON returned from Ollama.")
+        return data["message"]["content"]
 
-    # --------------------------------------------------------
-    # Validate response
-    # --------------------------------------------------------
+    except Exception as e:
 
-    if "response" not in data:
-        raise LLMError(
-            "Ollama response missing 'response' field."
-        )
-
-    return data["response"].strip()
+        raise RuntimeError(f"Ollama request failed: {str(e)}")
