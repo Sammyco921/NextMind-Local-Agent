@@ -1,163 +1,107 @@
-from typing import Dict, Any, List
+from core.llm import LLM
+from core.planner import Planner
+from core.executor import Executor
+from core.critic import Critic
+from core.orchestrator import Orchestrator
+from core.logger import Logger
+
+from state.state_model import StateModel
+
+from tools.tool_registry import ToolRegistry
+from tools.tool_schemas import TOOL_SCHEMAS
+
+from tools.file_tools import write_file, read_file, list_dir
 
 
-# =====================================================
-# TOOL SCHEMA REGISTRY (STRICT CONTRACT LAYER)
-# =====================================================
+# ====================================================
+# SYSTEM BUILDER
+# ====================================================
 
-TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+def build_system():
 
-    # -------------------------------------------------
-    # WRITE FILE
-    # -------------------------------------------------
-    "write_file": {
-        "args": {
-            "filename": "str",
-            "content": "str"
-        },
-        "required": ["filename", "content"],
-        "forbidden_values": {
-            "filename": [""],
-            "content": [None]
-        }
-    },
+    # ----------------------------------------
+    # TOOL REGISTRY
+    # ----------------------------------------
+    registry = ToolRegistry()
 
-    # -------------------------------------------------
-    # READ FILE
-    # -------------------------------------------------
-    "read_file": {
-        "args": {
-            "filename": "str"
-        },
-        "required": ["filename"],
-        "forbidden_values": {
-            "filename": [""]
-        }
-    },
+    registry.register("write_file", write_file)
+    registry.register("read_file", read_file)
+    registry.register("list_dir", list_dir)
 
-    # -------------------------------------------------
-    # LIST DIRECTORY
-    # -------------------------------------------------
-    "list_dir": {
-        "args": {
-            "path": "str"
-        },
-        "required": [],
-        "forbidden_values": {
-            "path": [None]
-        }
-    }
-}
+    # ----------------------------------------
+    # CORE COMPONENTS
+    # ----------------------------------------
+    llm = LLM()
 
+    planner = Planner(
+        llm=llm,
+        tool_schemas=TOOL_SCHEMAS
+    )
 
-# =====================================================
-# BASIC HELPERS
-# =====================================================
+    critic = Critic(
+        valid_tools=list(TOOL_SCHEMAS.keys())
+    )
 
-def is_valid_tool(tool_name: str) -> bool:
-    return tool_name in TOOL_SCHEMAS
+    executor = Executor(
+        registry=registry
+    )
+
+    state_model = StateModel()
+
+    logger = Logger()
+
+    # ----------------------------------------
+    # ORCHESTRATOR (MAIN SYSTEM LOOP)
+    # ----------------------------------------
+    system = Orchestrator(
+        planner=planner,
+        executor=executor,
+        state_model=state_model,
+        logger=logger,
+        critic=critic,
+        max_steps=10,
+        max_failures=3
+    )
+
+    return system
 
 
-def get_schema(tool_name: str) -> Dict[str, Any] | None:
-    return TOOL_SCHEMAS.get(tool_name)
+# ====================================================
+# CLI LOOP
+# ====================================================
 
+def main():
 
-def get_required_args(tool_name: str) -> List[str] | None:
+    system = build_system()
 
-    schema = TOOL_SCHEMAS.get(tool_name)
-    if not schema:
-        return None
+    print("\n=== NextMind v0.4 ===\n")
 
-    return schema.get("required", [])
+    while True:
 
+        try:
+            goal = input("Enter goal (or 'exit'): ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting...")
+            break
 
-def get_allowed_args(tool_name: str) -> List[str] | None:
-
-    schema = TOOL_SCHEMAS.get(tool_name)
-    if not schema:
-        return None
-
-    return list(schema.get("args", {}).keys())
-
-
-# =====================================================
-# STRICT VALIDATION (CORE GUARANTEE LAYER)
-# =====================================================
-
-def validate_tool_call(tool_name: str, args: dict) -> bool:
-
-    if tool_name not in TOOL_SCHEMAS:
-        raise ValueError(f"Unknown tool: {tool_name}")
-
-    schema = TOOL_SCHEMAS[tool_name]
-
-    required = schema.get("required", [])
-    allowed = set(schema.get("args", {}).keys())
-    forbidden = schema.get("forbidden_values", {})
-
-    if not isinstance(args, dict):
-        raise ValueError("Args must be a dict")
-
-    # -----------------------------
-    # REQUIRED CHECK
-    # -----------------------------
-    for key in required:
-        if key not in args:
-            raise ValueError(f"Missing required argument: {key}")
-
-    # -----------------------------
-    # UNKNOWN ARG REJECTION
-    # -----------------------------
-    for key in args:
-        if key not in allowed:
-            raise ValueError(f"Unexpected argument: {key}")
-
-    # -----------------------------
-    # FORBIDDEN VALUE CHECK
-    # -----------------------------
-    for key, bad_values in forbidden.items():
-
-        if key not in args:
+        if not goal:
             continue
 
-        if args[key] in bad_values:
-            raise ValueError(
-                f"Invalid value for {key}: {args[key]}"
-            )
+        if goal.strip().lower() == "exit":
+            break
 
-    return True
+        print("\n--- Running task ---\n")
+
+        result = system.run(goal)
+
+        print("\n--- FINAL RESULT ---\n")
+        print(result)
+        print("\n" + "-" * 60 + "\n")
 
 
-# =====================================================
-# PROMPT HELPER (FOR PLANNER)
-# =====================================================
+# ====================================================
+# ENTRY POINT
+# ====================================================
 
-def get_tool_spec_for_prompt() -> str:
-
-    lines = []
-
-    for tool, spec in TOOL_SCHEMAS.items():
-
-        lines.append(f"{tool}:")
-
-        args = spec.get("args", {})
-        required = set(spec.get("required", []))
-        forbidden = spec.get("forbidden_values", {})
-
-        if not args:
-            lines.append("  args: NONE")
-        else:
-            lines.append("  args:")
-
-            for arg, arg_type in args.items():
-                req = "required" if arg in required else "optional"
-                forbidden_hint = ""
-
-                if arg in forbidden:
-                    forbidden_hint = f" (forbidden: {forbidden[arg]})"
-
-                lines.append(f"    - {arg} ({arg_type}, {req}){forbidden_hint}")
-
-        lines.append("")
-
-    return "\n".join(lines)
+if __name__ == "__main__":
+    main()
