@@ -1,106 +1,107 @@
-from typing import Dict, Any, List
-from state.schema import Step, StepResult
+from core.schema import TOOL_SCHEMAS
 
-
-class ValidationError(Exception):
-    pass
-
-
-# ====================================================
-# VALIDATOR
-# ====================================================
 
 class Validator:
 
-    def __init__(self, tool_schemas: Dict[str, Dict[str, Any]]):
-        self.tool_schemas = tool_schemas
-
     # ====================================================
-    # STEP VALIDATION
+    # MAIN ENTRY
     # ====================================================
 
-    def validate_step(self, step: Dict[str, Any]) -> Step:
+    def validate_step(self, step: dict) -> dict:
+
         if not isinstance(step, dict):
-            raise ValidationError("Step must be a dict")
+            return self._fail("Step must be a dictionary")
 
         tool = step.get("tool")
-        args = step.get("args")
+        args = step.get("args", {})
 
-        if not isinstance(tool, str) or not tool.strip():
-            raise ValidationError("Missing or invalid tool name")
+        # ---------------------------------------------
+        # TOOL CHECK
+        # ---------------------------------------------
+        if not tool or not isinstance(tool, str):
+            return self._fail("Missing or invalid tool name")
 
-        if not isinstance(args, dict):
-            raise ValidationError("Args must be a dict")
+        if tool not in TOOL_SCHEMAS:
+            return self._fail(f"Unknown tool: {tool}")
 
-        tool = tool.strip()
-
-        if tool not in self.tool_schemas:
-            raise ValidationError(f"Unknown tool: {tool}")
-
-        schema = self.tool_schemas[tool]
+        schema = TOOL_SCHEMAS[tool]
         required = schema.get("required", [])
         allowed = set(schema.get("args", {}).keys())
 
-        # ----------------------------
-        # REQUIRED ARG CHECK
-        # ----------------------------
+        if not isinstance(args, dict):
+            return self._fail("Arguments must be a dictionary")
+
+        # ---------------------------------------------
+        # REQUIRED ARGUMENTS
+        # ---------------------------------------------
         for key in required:
             if key not in args:
-                raise ValidationError(f"Missing required arg: {key}")
+                return self._fail(f"Missing required argument: {key}")
 
-        # ----------------------------
-        # UNKNOWN ARG CHECK
-        # ----------------------------
+        # ---------------------------------------------
+        # UNKNOWN ARGUMENTS
+        # ---------------------------------------------
         for key in args:
             if key not in allowed:
-                raise ValidationError(f"Unexpected arg: {key}")
+                return self._fail(f"Unexpected argument: {key}")
 
-        # ----------------------------
-        # EMPTY STRING CHECK (IMPORTANT)
-        # ----------------------------
-        for k, v in args.items():
-            if isinstance(v, str) and not v.strip():
-                raise ValidationError(f"Empty string not allowed for '{k}'")
+        # ---------------------------------------------
+        # EMPTY STRING GUARD (CRITICAL FIX)
+        # ---------------------------------------------
+        for key, value in args.items():
+            if isinstance(value, str) and value.strip() == "":
+                return self._fail(f"Argument '{key}' cannot be empty string")
 
-        return Step(
-            id=step.get("id", 0),
-            tool=tool,
-            args=args
-        )
-
-    # ====================================================
-    # RESULT VALIDATION
-    # ====================================================
-
-    def validate_result(self, result: Dict[str, Any]) -> StepResult:
-        if not isinstance(result, dict):
-            raise ValidationError("Result must be dict")
-
-        status = result.get("status")
-
-        if status not in ["success", "fail", "fatal_error"]:
-            raise ValidationError(f"Invalid status: {status}")
-
-        return StepResult(
-            status=status,
-            output=result.get("output"),
-            error=result.get("error"),
-            fix=result.get("fix"),
-            step=result.get("step")
-        )
+        return {
+            "status": "success",
+            "step": step
+        }
 
     # ====================================================
-    # SAFE WRAPPERS
+    # BATCH VALIDATION (useful for planner)
     # ====================================================
 
-    def safe_validate_step(self, step: Dict[str, Any]):
-        try:
-            return self.validate_step(step)
-        except ValidationError as e:
-            return None, str(e)
+    def validate_plan(self, plan: dict) -> dict:
 
-    def safe_validate_result(self, result: Dict[str, Any]):
-        try:
-            return self.validate_result(result)
-        except ValidationError as e:
-            return None, str(e)
+        if not isinstance(plan, dict):
+            return self._fail("Plan must be a dictionary")
+
+        steps = plan.get("steps")
+
+        if not isinstance(steps, list):
+            return self._fail("Plan must contain a list of steps")
+
+        validated = []
+
+        for step in steps:
+
+            result = self.validate_step(step)
+
+            if result["status"] == "fail":
+                return result  # fail fast (strict mode)
+
+            validated.append(result["step"])
+
+        return {
+            "status": "success",
+            "steps": validated
+        }
+
+    # ====================================================
+    # SAFE WRAPPER FOR EXECUTOR
+    # ====================================================
+
+    def precheck(self, step: dict):
+
+        return self.validate_step(step)
+
+    # ====================================================
+    # INTERNAL FAIL FORMAT
+    # ====================================================
+
+    def _fail(self, reason: str):
+
+        return {
+            "status": "fail",
+            "reason": reason
+        }
