@@ -1,133 +1,92 @@
 import os
 import json
 from datetime import datetime
-from pathlib import Path
 
 
 class Logger:
-    """
-    Simple structured logger for NextMind v0.4.
 
-    Responsibilities:
-    - Session-based logging
-    - Planner / execution / error logs
-    - State snapshots
-    """
+    def __init__(self, log_dir="logs"):
+        self.log_dir = log_dir
+        os.makedirs(self.log_dir, exist_ok=True)
 
-    def __init__(self, base_dir="logs"):
-        self.base_dir = Path(base_dir)
-        self.session_dir = None
-        self.session_id = None
+        self.session_file = self._new_session_file()
 
     # ====================================================
     # SESSION MANAGEMENT
     # ====================================================
 
-    def start_session(self, goal: str):
-        """
-        Create a new logging session.
-        """
-
-        self.session_id = self._generate_session_id(goal)
-        self.session_dir = self.base_dir / f"session_{self.session_id}"
-
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-
-        # create files
-        (self.session_dir / "planner.log").touch()
-        (self.session_dir / "execution.log").touch()
-        (self.session_dir / "errors.log").touch()
-
-        self.log_event("session_start", {"goal": goal})
-
-        return self.session_id
+    def _new_session_file(self):
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        return os.path.join(self.log_dir, f"session_{timestamp}.log")
 
     # ====================================================
-    # PLANNER LOG
+    # CORE WRITE FUNCTION
     # ====================================================
 
-    def log_planner(self, raw: str, parsed: dict = None):
-        self._append(
-            "planner.log",
-            {
-                "timestamp": self._now(),
-                "raw": raw,
-                "parsed": parsed
-            }
-        )
+    def _write(self, level: str, message: str, data=None):
+
+        timestamp = datetime.utcnow().isoformat()
+
+        entry = {
+            "time": timestamp,
+            "level": level,
+            "message": message,
+            "data": data
+        }
+
+        line = self._format(entry)
+
+        with open(self.session_file, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     # ====================================================
-    # EXECUTION LOG
+    # FORMATTER
     # ====================================================
 
-    def log_execution(self, step: dict, result: dict):
-        self._append(
-            "execution.log",
-            {
-                "timestamp": self._now(),
-                "step": step,
-                "result": result
-            }
-        )
+    def _format(self, entry: dict) -> str:
+
+        base = f"[{entry['time']}] [{entry['level']}] {entry['message']}"
+
+        if entry["data"] is not None:
+            try:
+                pretty = json.dumps(entry["data"], indent=2)
+                return base + "\n" + pretty
+            except Exception:
+                return base + "\n" + str(entry["data"])
+
+        return base
 
     # ====================================================
-    # ERROR LOG
+    # PUBLIC API
     # ====================================================
 
-    def log_error(self, error: str, context: dict = None):
-        self._append(
-            "errors.log",
-            {
-                "timestamp": self._now(),
-                "error": error,
-                "context": context or {}
-            }
-        )
+    def info(self, message, data=None):
+        self._write("INFO", message, data)
+
+    def debug(self, message, data=None):
+        self._write("DEBUG", message, data)
+
+    def warning(self, message, data=None):
+        self._write("WARNING", message, data)
+
+    def error(self, message, data=None):
+        self._write("ERROR", message, data)
+
+    def critical(self, message, data=None):
+        self._write("CRITICAL", message, data)
 
     # ====================================================
-    # GENERIC EVENT LOG
+    # SPECIALIZED LOGS (VERY USEFUL FOR AGENTS)
     # ====================================================
 
-    def log_event(self, event_type: str, data: dict):
-        self._append(
-            "execution.log",
-            {
-                "timestamp": self._now(),
-                "event": event_type,
-                "data": data
-            }
-        )
+    def log_step(self, step: dict):
+        self._write("STEP", "Planner step executed", step)
 
-    # ====================================================
-    # STATE SNAPSHOT
-    # ====================================================
+    def log_result(self, result: dict):
+        self._write("RESULT", "Execution result", result)
 
-    def save_state(self, state: dict):
-        if not self.session_dir:
-            return
+    def log_failure(self, reason: str, data=None):
+        self._write("FAILURE", reason, data)
 
-        path = self.session_dir / "state.json"
-
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-
-    # ====================================================
-    # INTERNAL HELPERS
-    # ====================================================
-
-    def _append(self, filename: str, data: dict):
-        if not self.session_dir:
-            return
-
-        path = self.session_dir / filename
-
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(data) + "\n")
-
-    def _generate_session_id(self, goal: str) -> str:
-        base = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        short = abs(hash(goal)) % 10000
-        return f"{base}_{short}"
-
-    def _now(self):
-        return datetime.utcnow().isoformat()
+    def log_success(self, message: str, data=None):
+        self._write("SUCCESS", message, data)
