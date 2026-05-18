@@ -9,27 +9,35 @@ class Critic:
 
     def evaluate_step(self, step: dict, result: dict):
 
+        # ----------------------------------------
+        # STRUCTURE VALIDATION (STRICT)
+        # ----------------------------------------
         if not isinstance(step, dict):
-            return self._fail("Invalid step format", "Step must be dict")
+            return self._fail(
+                "Invalid step format",
+                "Step must be a dict"
+            )
 
         if not isinstance(result, dict):
-            return self._fail("Invalid executor output", "Result must be dict")
+            return self._fail(
+                "Invalid executor output",
+                "Result must be a dict"
+            )
 
         tool = step.get("tool")
-        args = step.get("args", {})
 
-        # ------------------------------------------------
-        # TOOL VALIDATION (light, not authoritative)
-        # ------------------------------------------------
+        # ----------------------------------------
+        # TOOL VALIDATION (OPTIONAL SAFETY LAYER)
+        # ----------------------------------------
         if self.valid_tools and tool not in self.valid_tools:
             return self._fail(
                 "Unknown tool used",
-                f"Tool '{tool}' is not in allowed tool list"
+                f"Tool '{tool}' not allowed"
             )
 
-        # ------------------------------------------------
-        # EXECUTION STATUS CHECK
-        # ------------------------------------------------
+        # ----------------------------------------
+        # STATUS CHECK (SINGLE SOURCE OF TRUTH)
+        # ----------------------------------------
         status = result.get("status")
 
         if status != "success":
@@ -40,9 +48,10 @@ class Critic:
 
         output = result.get("output")
 
-        # ------------------------------------------------
-        # TOOL-SPECIFIC CHECKS
-        # ------------------------------------------------
+        # ----------------------------------------
+        # TOOL-SPECIFIC OUTPUT VALIDATION
+        # ----------------------------------------
+
         if tool == "write_file":
             return self._check_write_file(output)
 
@@ -52,26 +61,25 @@ class Critic:
         if tool == "list_dir":
             return self._check_list_dir(output)
 
-        # ------------------------------------------------
+        # ----------------------------------------
         # DEFAULT PASS
-        # ------------------------------------------------
+        # ----------------------------------------
         return {
             "status": "pass",
             "tool": tool,
-            "step_id": step.get("id"),
             "reason": None
         }
 
     # ====================================================
-    # WRITE FILE
+    # WRITE FILE VALIDATION
     # ====================================================
 
     def _check_write_file(self, output):
 
         if not isinstance(output, dict):
             return self._fail(
-                "Invalid output type",
-                "write_file must return dict"
+                "Invalid write_file output",
+                "Expected dict return from tool"
             )
 
         if "file" not in output:
@@ -83,15 +91,15 @@ class Critic:
         return {"status": "pass"}
 
     # ====================================================
-    # READ FILE
+    # READ FILE VALIDATION
     # ====================================================
 
     def _check_read_file(self, output):
 
         if not isinstance(output, dict):
             return self._fail(
-                "Invalid output type",
-                "read_file must return dict"
+                "Invalid read_file output",
+                "Expected dict return from tool"
             )
 
         if "content" not in output:
@@ -103,15 +111,15 @@ class Critic:
         return {"status": "pass"}
 
     # ====================================================
-    # LIST DIR
+    # LIST DIR VALIDATION
     # ====================================================
 
     def _check_list_dir(self, output):
 
         if not isinstance(output, dict):
             return self._fail(
-                "Invalid output type",
-                "list_dir must return dict"
+                "Invalid list_dir output",
+                "Expected dict return from tool"
             )
 
         if "items" not in output:
@@ -123,7 +131,7 @@ class Critic:
         return {"status": "pass"}
 
     # ====================================================
-    # FIX SUGGESTION (SAFE + NON-HALLUCINATED)
+    # FIX SUGGESTION (LIGHTWEIGHT, NON-OVERREACHING)
     # ====================================================
 
     def _suggest_fix(self, tool, result):
@@ -131,23 +139,23 @@ class Critic:
         error = result.get("error")
 
         if not error:
-            return "Check executor implementation and tool contract"
+            return "Check executor and tool implementation"
 
         error = str(error).lower()
-
-        if "permission" in error:
-            return "Check filesystem permissions"
 
         if "not found" in error:
             return "Ensure file or path exists before operation"
 
+        if "permission" in error:
+            return "Check filesystem permissions"
+
         if tool == "write_file":
-            return "Validate filename and content arguments"
+            return "Verify filename and content are valid strings"
 
         if tool == "read_file":
             return "Ensure file exists before reading"
 
-        return "Inspect executor + tool implementation"
+        return "Inspect execution pipeline and tool contract"
 
     # ====================================================
     # STANDARD FAIL FORMAT
