@@ -1,4 +1,11 @@
+from core.memory_manager import MemoryManager
+
+
 class StateModel:
+
+    def __init__(self, memory: MemoryManager = None):
+
+        self.memory = memory
 
     # ====================================================
     # CREATE INITIAL STATE
@@ -6,24 +13,18 @@ class StateModel:
 
     def create(self, goal: str):
 
-        if not isinstance(goal, str):
-            raise TypeError("Goal must be a string")
-
         return {
             "goal": goal,
             "history": [],
-            "step_index": 0,
-            "status": "running"
+            "steps_executed": 0,
+            "memory_context": self._get_memory_context()
         }
 
     # ====================================================
-    # UPDATE STATE AFTER STEP
+    # UPDATE STATE (OPTIONAL UTILITY)
     # ====================================================
 
     def update(self, state: dict, step: dict, result: dict):
-
-        if not isinstance(state, dict):
-            raise TypeError("State must be dict")
 
         if "history" not in state:
             state["history"] = []
@@ -33,31 +34,51 @@ class StateModel:
             "result": result
         })
 
-        state["step_index"] = len(state["history"])
+        state["steps_executed"] = len(state["history"])
 
         return state
 
     # ====================================================
-    # GETTERS (SAFE ACCESS LAYER)
+    # MEMORY INJECTION (CRITICAL FOR v0.5+)
     # ====================================================
 
-    def get_history(self, state: dict):
-        return state.get("history", [])
+    def _get_memory_context(self):
 
-    def get_last_result(self, state: dict):
+        if not self.memory:
+            return {
+                "recent_tasks": [],
+                "recent_errors": [],
+                "recent_events": []
+            }
 
-        history = state.get("history", [])
+        return self.memory.build_context()
 
-        if not history:
-            return None
+    # ====================================================
+    # REFRESH MEMORY CONTEXT (OPTIONAL)
+    # ====================================================
 
-        return history[-1].get("result")
+    def refresh_memory(self, state: dict):
 
-    def get_last_step(self, state: dict):
+        state["memory_context"] = self._get_memory_context()
 
-        history = state.get("history", [])
+        return state
 
-        if not history:
-            return None
+    # ====================================================
+    # STATE SANITY CHECK (DEBUG TOOL)
+    # ====================================================
 
-        return history[-1].get("step")
+    def validate(self, state: dict):
+
+        if not isinstance(state, dict):
+            return False
+
+        required_keys = ["goal", "history", "steps_executed"]
+
+        for key in required_keys:
+            if key not in state:
+                return False
+
+        if not isinstance(state["history"], list):
+            return False
+
+        return True
