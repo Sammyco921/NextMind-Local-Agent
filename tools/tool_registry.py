@@ -1,104 +1,69 @@
-from typing import Dict, Any, Callable
-
-
 class ToolRegistry:
-    """
-    Schema-aware tool registry (typed version).
-    """
 
     def __init__(self):
-        self.tools: Dict[str, Dict[str, Any]] = {}
+        self._tools = {}
 
-    # -------------------------------------------------
+    # ====================================================
     # REGISTER TOOL
-    # -------------------------------------------------
-    def register(
-        self,
-        name: str,
-        func: Callable,
-        args_schema: Dict[str, str],
-        description: str = ""
-    ):
-        """
-        args_schema format:
-        {
-            "filename": "str",
-            "content": "str"
-        }
-        """
+    # ====================================================
 
-        self.tools[name] = {
+    def register(self, name: str, func, description: str = "", schema: dict = None):
+
+        if not isinstance(name, str):
+            raise TypeError("Tool name must be a string")
+
+        if not callable(func):
+            raise TypeError("Tool function must be callable")
+
+        name = self._normalize(name)
+
+        self._tools[name] = {
+            "name": name,
             "func": func,
-            "args_schema": args_schema,
-            "description": description
+            "description": description,
+            "schema": schema or {}
         }
 
-    # -------------------------------------------------
+    # ====================================================
     # GET TOOL
-    # -------------------------------------------------
-    def get(self, name: str) -> Callable:
-        if name not in self.tools:
-            raise ValueError(f"Unknown tool: {name}")
+    # ====================================================
 
-        return self.tools[name]["func"]
+    def get(self, name: str):
 
-    # -------------------------------------------------
-    # VALIDATE ARGS (STRICT)
-    # -------------------------------------------------
-    def validate_args(self, name: str, args: dict):
+        name = self._normalize(name)
 
-        if name not in self.tools:
-            raise ValueError(f"Unknown tool: {name}")
+        if name not in self._tools:
+            raise KeyError(f"Tool not found: {name}")
 
-        schema = self.tools[name]["args_schema"]
+        return self._tools[name]
 
-        # required keys
-        for key in schema.keys():
-            if key not in args:
-                raise ValueError(f"{name} missing required arg: {key}")
+    # ====================================================
+    # CALL TOOL (SAFE EXECUTION INTERFACE)
+    # ====================================================
 
-        # reject unknown args
-        for key in args:
-            if key not in schema:
-                raise ValueError(f"{name} got unexpected arg: {key}")
+    def call(self, name: str, args: dict):
 
-        return True
+        if not isinstance(args, dict):
+            raise TypeError("Tool args must be dict")
 
-    # -------------------------------------------------
-    # EXECUTE TOOL
-    # -------------------------------------------------
-    def run(self, name: str, args: dict):
+        tool = self.get(name)
 
-        if name not in self.tools:
-            return {"status": "fail", "error": f"Unknown tool: {name}"}
+        func = tool["func"]
 
-        try:
-            self.validate_args(name, args)
+        return func(**args)
 
-            func = self.tools[name]["func"]
-            result = func(**args)
+    # ====================================================
+    # LIST TOOLS
+    # ====================================================
 
-            return {
-                "status": "success",
-                "output": result,
-                "error": None
-            }
-
-        except Exception as e:
-            return {
-                "status": "fail",
-                "output": None,
-                "error": str(e)
-            }
-
-    # -------------------------------------------------
-    # DEBUG HELP
-    # -------------------------------------------------
     def list_tools(self):
-        return {
-            name: {
-                "args": meta["args_schema"],
-                "description": meta["description"]
-            }
-            for name, meta in self.tools.items()
-        }
+
+        return list(self._tools.values())
+
+    # ====================================================
+    # TOOL NAME NORMALIZATION
+    # ====================================================
+
+    def _normalize(self, name: str):
+
+        return str(name).strip().lower()
