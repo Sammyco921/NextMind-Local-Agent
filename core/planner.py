@@ -1,152 +1,211 @@
 import json
-from typing import Dict, Any, List
 
-from pydantic import BaseModel, ValidationError
-from core.llm import call_llm
-
-
-# ====================================================
-# Pydantic Schemas (STRICT OUTPUT CONTRACT)
-# ====================================================
-
-class PlanStep(BaseModel):
-    id: int
-    tool: str
-    args: Dict[str, Any]
-
-
-class Plan(BaseModel):
-    goal: str
-    steps: List[PlanStep]
-
-
-# ====================================================
-# PLANNER
-# ====================================================
 
 class Planner:
-    """
-    Schema-enforced + self-repairing planner.
 
-    Guarantees:
-    - valid JSON output
-    - valid structure (via Pydantic)
-    - tool schema visibility from registry
-    """
+    def __init__(self, llm, tool_schemas):
+        self.llm = llm
+        self.tool_schemas = tool_schemas
 
-    def __init__(self, tool_registry):
-        self.tool_registry = tool_registry
+    # ====================================================
+    # MAIN ENTRY
+    # ====================================================
 
-    # ----------------------------------------------------
-    # TOOL CONTEXT BUILDER
-    # ----------------------------------------------------
-    def _build_tool_context(self) -> str:
-        lines = []
+    def create_plan(self, goal: str, state: dict = None):
 
-        for tool_name, meta in self.tool_registry.tools.items():
-            schema = meta["args_schema"]
+        prompt = self._build_prompt(goal, state)
 
-            lines.append(f"\nTool: {tool_name}")
+        raw = self.llm.generate(prompt)
 
-            if not schema:
-                lines.append("  args: none")
-                continue
+        return self._parse_and_validate(raw)
 
-            lines.append("  args:")
+    # ====================================================
+    # PROMPT
+    # ====================================================
 
-            for arg_name, arg_type in schema.items():
-                lines.append(f"    - {arg_name}: {arg_type}")
+    def _build_prompt(self, goal, state):
 
-        return "\n".join(lines)
+        schema_text = self._format_schemas()
 
-    # ----------------------------------------------------
-    # SYSTEM PROMPT
-    # ----------------------------------------------------
-    def _build_prompt(self, goal: str) -> str:
-
-        tool_context = self._build_tool_context()
+        # 👇 THIS is where your rule MUST go
+        strict_rules = """
+CRITICAL RULES:
+- Output ONLY JSON
+- NO markdown
+- NO explanations
+- NO empty strings allowed
+- ALL args must be non-empty valid strings
+- DO NOT output empty strings. All args must be non-empty valid strings.
+- Only use tools listed below
+- Never invent tools or arguments
+"""
 
         return f"""
 You are a strict planning engine.
 
-RULES:
-- Output MUST be valid JSON only
-- Must match schema EXACTLY
-- Only use tools listed below
-- Only use allowed argument names
-- Do NOT invent arguments or tools
+{strict_rules}
 
-TOOLS:
-{tool_context}
-
-OUTPUT FORMAT:
+Return format:
 {{
-  "goal": "...",
   "steps": [
     {{
-      "id": 1,
+      "id": 0,
       "tool": "tool_name",
-      "args": {{
-        "arg": "value"
-      }}
+      "args": {{}}
     }}
   ]
 }}
 
+AVAILABLE TOOLS:
+{schema_text}
+
 GOAL:
 {goal}
+
+STATE:
+{state}
 """.strip()
 
-    # ----------------------------------------------------
-    # CREATE PLAN (WITH AUTO REPAIR LOOP)
-    # ----------------------------------------------------
-    def create_plan(self, goal: str, max_retries: int = 2) -> Dict[str, Any]:
+    # ====================================================
+    # SCHEMA FORMATTER
+    # ====================================================
 
-        last_error = None
+    def _format_schemas(self):
 
-        for attempt in range(max_retries + 1):
+        lines = []
 
-            prompt = self._build_prompt(goal)
+        for tool, spec in self.tool_schemas.items():
 
-            # inject repair feedback if needed
-            if last_error:
-                prompt += f"""
+            lines.append(f"{tool}:")
 
-PREVIOUS OUTPUT WAS INVALID:
+            args = spec.get("args", {})
+            required = spec.get("required", [])
 
-{last_error}
+            for arg, typ in args.items():
+                req = "required" if arg in required else "optional"
+                lines.append(f"  - {arg} ({typ}, {req})")
 
-Fix it. Return ONLY valid JSON matching the schema.
-"""
+            lines.append("")
 
-            raw = call_llm(prompt)
+        return "\n".join(lines)
 
-            # -----------------------------
-            # STEP 1: JSON PARSE
-            # -----------------------------
-            try:
-                data = json.loads(raw)
+    # ====================================================
+    # PARSE + VALIDATE
+    # ====================================================
 
-            except json.JSONDecodeError as e:
-                last_error = f"Invalid JSON: {str(e)}"
+    def _parse_and_validate(self, raw: str):
+
+        raw = raw.strip()
+
+        json_text = self._extract_json(raw)
+
+        try:
+            data = json.loads(json_text)
+
+        except Exception as e:
+            raise RuntimeError(f"Invalid JSON from planner: {e}\nRAW:\n{raw}")
+
+        # ------------------------------------------------
+        # STRUCTURE NORMALIZATION
+        # ------------------------------------------------
+        if isinstance(data, list):
+            data = {"steps": data}
+
+        if "steps" not in data:
+            raise RuntimeError(f"Missing steps\nRAW:\n{raw}")
+
+        if not isinstance(data["steps"], list):
+            raise RuntimeError(f"'steps' must be a list\nRAW:\n{raw}")
+
+        normalized = []
+
+        for i, step in enumerate(data["steps"]):
+
+            if not isinstance(step, dict):
                 continue
 
-            # -----------------------------
-            # STEP 2: STRUCTURE VALIDATION
-            # -----------------------------
-            try:
-                plan = Plan(**data)
-                return plan.model_dump()
+            tool = step.get("tool")
+            args = step.get("args", {})
 
-            except ValidationError as e:
-                last_error = str(e)
+            if not tool:
                 continue
 
-        # -----------------------------
-        # FAILURE CASE
-        # -----------------------------
-        return {
-            "status": "fail",
-            "error": "Planner failed after max retries",
-            "last_error": last_error
-        }
+            if not isinstance(args, dict):
+                continue
+
+            # ------------------------------------------------
+            # 🚨 HARD FILTER: NO EMPTY STRINGS
+            # ------------------------------------------------
+            cleaned_args = {}
+            for k, v in args.items():
+
+                if isinstance(v, str) and v.strip() == "":
+                    continue  # drop empty strings
+
+                cleaned_args[k] = v
+
+            # ------------------------------------------------
+            # TOOL VALIDATION
+            # ------------------------------------------------
+            if tool not in self.tool_schemas:
+                continue
+
+            schema = self.tool_schemas[tool]
+            required = schema.get("required", [])
+
+            # ensure required args exist AND are non-empty
+            valid = True
+            for req in required:
+                if req not in cleaned_args:
+                    valid = False
+                elif isinstance(cleaned_args[req], str) and cleaned_args[req].strip() == "":
+                    valid = False
+
+            if not valid:
+                continue
+
+            normalized.append({
+                "id": step.get("id", i),
+                "tool": tool,
+                "args": cleaned_args
+            })
+
+        if not normalized:
+            raise RuntimeError("Planner produced no valid steps after validation")
+
+        return {"steps": normalized}
+
+    # ====================================================
+    # JSON EXTRACTION
+    # ====================================================
+
+    def _extract_json(self, text: str):
+
+        text = text.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+
+        start_obj = text.find("{")
+        start_arr = text.find("[")
+
+        if start_obj == -1 and start_arr == -1:
+            raise RuntimeError(f"No JSON found:\n{text}")
+
+        if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
+            start = start_arr
+            open_c, close_c = "[", "]"
+        else:
+            start = start_obj
+            open_c, close_c = "{", "}"
+
+        depth = 0
+
+        for i in range(start, len(text)):
+
+            if text[i] == open_c:
+                depth += 1
+            elif text[i] == close_c:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i+1]
+
+        raise RuntimeError(f"Unterminated JSON:\n{text}")
