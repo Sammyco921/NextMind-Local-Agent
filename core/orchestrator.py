@@ -6,6 +6,7 @@ class Orchestrator:
         executor,
         state_model,
         logger,
+        critic=None,              # ✅ ADDED (fixes your crash)
         max_steps=10,
         max_failures=3
     ):
@@ -13,6 +14,7 @@ class Orchestrator:
         self.executor = executor
         self.state_model = state_model
         self.logger = logger
+        self.critic = critic      # ✅ store it safely
 
         self.max_steps = max_steps
         self.max_failures = max_failures
@@ -84,20 +86,47 @@ class Orchestrator:
 
                 result = self.executor.run(step)
 
-                self.logger.log_result(result)
+                # ----------------------------------------
+                # CRITIC EVALUATION (NEW PATCH)
+                # ----------------------------------------
+                critique = None
+                if self.critic:
+                    try:
+                        critique = self.critic.evaluate_step(step, result)
+                    except Exception as e:
+                        self.logger.error("Critic crash", {"error": str(e)})
+                        critique = {"status": "fail", "reason": str(e)}
+
+                self.logger.log_result({
+                    "result": result,
+                    "critique": critique
+                })
 
                 # ----------------------------------------
                 # STORE HISTORY
                 # ----------------------------------------
                 state["history"].append({
                     "step": step,
-                    "result": result
+                    "result": result,
+                    "critique": critique
                 })
 
                 state["steps_executed"] = len(state["history"])
 
                 # ----------------------------------------
-                # FAILURE HANDLING
+                # CRITIC FAIL HANDLING (NEW LOGIC)
+                # ----------------------------------------
+                if critique and critique.get("status") == "fail":
+                    failure_count += 1
+                    self.logger.warning("Critic failure", critique)
+
+                    if failure_count >= self.max_failures:
+                        return self._fail(state, "Too many validation failures", critique)
+
+                    continue
+
+                # ----------------------------------------
+                # EXECUTION FAILURE HANDLING
                 # ----------------------------------------
                 status = result.get("status")
 
@@ -142,7 +171,7 @@ class Orchestrator:
             return self._fatal(state, str(e))
 
     # ====================================================
-    # GOAL CHECK
+    # GOAL CHECK (UNCHANGED)
     # ====================================================
 
     def _goal_complete(self, goal, state):
@@ -174,7 +203,7 @@ class Orchestrator:
         return False
 
     # ====================================================
-    # FAILURE HELPERS
+    # FAILURE HELPERS (UNCHANGED)
     # ====================================================
 
     def _fail(self, state, reason, details=None):
