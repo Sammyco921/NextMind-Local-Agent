@@ -1,209 +1,136 @@
 import json
-import sqlite3
-from datetime import datetime
-
-from config.config import MEMORY_CONFIG
+import os
+import time
 
 
 class MemoryManager:
-    """
-    Handles persistent memory storage for NextMind.
 
-    Responsibilities:
-    - Store completed steps
-    - Store task summaries
-    - Retrieve historical context
-    - Manage SQLite persistence
-    """
+    def __init__(self, path="memory/memory_store.json"):
+        self.path = path
+        self.memory = self._load()
 
-    def __init__(self):
+    # ====================================================
+    # LOAD / SAVE
+    # ====================================================
 
-        self.db_path = MEMORY_CONFIG.SQLITE_DB_PATH
+    def _load(self):
 
-        self._initialize_database()
+        if not os.path.exists(self.path):
+            return {
+                "episodic": [],
+                "tasks": [],
+                "errors": []
+            }
 
-    # ========================================================
-    # DATABASE INITIALIZATION
-    # ========================================================
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                return json.load(f)
 
-    def _initialize_database(self):
-        """
-        Create required tables if they do not exist.
-        """
+        except Exception:
+            # corrupt memory fallback
+            return {
+                "episodic": [],
+                "tasks": [],
+                "errors": []
+            }
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+    def _save(self):
 
-        # ----------------------------------------------------
-        # Task summaries
-        # ----------------------------------------------------
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS task_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            goal TEXT,
-            plan TEXT,
-            created_at TEXT
-        )
-        """)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.memory, f, indent=2)
 
-        # ----------------------------------------------------
-        # Step execution history
-        # ----------------------------------------------------
+    # ====================================================
+    # CORE WRITE API
+    # ====================================================
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS step_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            goal TEXT,
-            step TEXT,
-            result TEXT,
-            created_at TEXT
-        )
-        """)
+    def add_episodic(self, event: dict):
 
-        conn.commit()
-        conn.close()
+        self.memory["episodic"].append({
+            "timestamp": time.time(),
+            "event": event
+        })
 
-    # ========================================================
-    # STORE STEP RESULT
-    # ========================================================
+        self._save()
 
-    def store_step_result(
-        self,
-        goal: str,
-        step: dict,
-        result: dict
-    ):
-        """
-        Store individual step execution result.
-        """
+    def add_task(self, goal: str, result: dict):
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        self.memory["tasks"].append({
+            "timestamp": time.time(),
+            "goal": goal,
+            "result": result
+        })
 
-        cursor.execute("""
-        INSERT INTO step_memory (
-            goal,
-            step,
-            result,
-            created_at
-        )
-        VALUES (?, ?, ?, ?)
-        """, (
-            goal,
-            json.dumps(step),
-            json.dumps(result),
-            datetime.utcnow().isoformat()
-        ))
+        self._save()
 
-        conn.commit()
-        conn.close()
+    def add_error(self, error: dict):
 
-    # ========================================================
-    # STORE TASK SUMMARY
-    # ========================================================
+        self.memory["errors"].append({
+            "timestamp": time.time(),
+            "error": error
+        })
 
-    def store_task_summary(
-        self,
-        goal: str,
-        plan: dict
-    ):
-        """
-        Store completed task summary.
-        """
+        self._save()
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+    # ====================================================
+    # RETRIEVAL (SIMPLE BUT EFFECTIVE)
+    # ====================================================
 
-        cursor.execute("""
-        INSERT INTO task_memory (
-            goal,
-            plan,
-            created_at
-        )
-        VALUES (?, ?, ?)
-        """, (
-            goal,
-            json.dumps(plan),
-            datetime.utcnow().isoformat()
-        ))
+    def get_recent_tasks(self, n=5):
 
-        conn.commit()
-        conn.close()
+        return self.memory["tasks"][-n:]
 
-    # ========================================================
-    # RETRIEVE RECENT TASKS
-    # ========================================================
+    def get_recent_errors(self, n=5):
 
-    def get_recent_tasks(
-        self,
-        limit: int = 5
-    ) -> list:
-        """
-        Retrieve recent completed tasks.
-        """
+        return self.memory["errors"][-n:]
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+    def get_recent_events(self, n=5):
 
-        cursor.execute("""
-        SELECT goal, plan, created_at
-        FROM task_memory
-        ORDER BY id DESC
-        LIMIT ?
-        """, (limit,))
+        return self.memory["episodic"][-n:]
 
-        rows = cursor.fetchall()
+    # ====================================================
+    # CONTEXT BUILDING (FOR PLANNER)
+    # ====================================================
 
-        conn.close()
+    def build_context(self):
 
-        tasks = []
+        return {
+            "recent_tasks": self.get_recent_tasks(),
+            "recent_errors": self.get_recent_errors(),
+            "recent_events": self.get_recent_events()
+        }
 
-        for row in rows:
+    # ====================================================
+    # SEARCH (VERY SIMPLE VERSION)
+    # ====================================================
 
-            tasks.append({
-                "goal": row[0],
-                "plan": json.loads(row[1]),
-                "created_at": row[2]
-            })
+    def search(self, keyword: str):
 
-        return tasks
+        keyword = keyword.lower()
 
-    # ========================================================
-    # RETRIEVE STEP HISTORY
-    # ========================================================
+        matches = []
 
-    def get_step_history(
-        self,
-        limit: int = 10
-    ) -> list:
-        """
-        Retrieve recent step execution history.
-        """
+        for task in self.memory["tasks"]:
+            if keyword in task.get("goal", "").lower():
+                matches.append(task)
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        for error in self.memory["errors"]:
+            if keyword in str(error).lower():
+                matches.append(error)
 
-        cursor.execute("""
-        SELECT goal, step, result, created_at
-        FROM step_memory
-        ORDER BY id DESC
-        LIMIT ?
-        """, (limit,))
+        return matches
 
-        rows = cursor.fetchall()
+    # ====================================================
+    # CLEAR MEMORY (DEBUG TOOL)
+    # ====================================================
 
-        conn.close()
+    def clear(self):
 
-        history = []
+        self.memory = {
+            "episodic": [],
+            "tasks": [],
+            "errors": []
+        }
 
-        for row in rows:
-
-            history.append({
-                "goal": row[0],
-                "step": json.loads(row[1]),
-                "result": json.loads(row[2]),
-                "created_at": row[3]
-            })
-
-        return history
+        self._save()
