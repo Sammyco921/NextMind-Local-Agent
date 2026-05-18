@@ -1,84 +1,70 @@
-from typing import Dict, Any
-
-
 class Executor:
-    """
-    Schema-safe executor.
 
-    Rules:
-    - NEVER trust planner output
-    - ToolRegistry is the ONLY authority
-    - Fail fast on any mismatch
-    """
+    def __init__(self, registry, critic=None):
 
-    def __init__(self, tool_registry):
-        self.tool_registry = tool_registry
+        self.registry = registry
+        self.critic = critic
 
-    # ----------------------------------------------------
-    # EXECUTE SINGLE STEP
-    # ----------------------------------------------------
-    def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
+    # ====================================================
+    # MAIN EXECUTION
+    # ====================================================
+
+    def run(self, step: dict):
 
         tool_name = step.get("tool")
         args = step.get("args", {})
 
-        # -----------------------------
-        # 1. TOOL EXISTS CHECK
-        # -----------------------------
-        if tool_name not in self.tool_registry.tools:
-            return {
-                "status": "fail",
-                "output": None,
-                "error": f"Unknown tool: {tool_name}"
-            }
-
-        tool_meta = self.tool_registry.tools[tool_name]
-        schema = tool_meta["args_schema"]
-
-        # -----------------------------
-        # 2. STRICT ARG VALIDATION
-        # -----------------------------
+        # --------------------------------------------
+        # TOOL LOOKUP
+        # --------------------------------------------
         try:
-            self.tool_registry.validate_args(tool_name, args)
+            tool = self.registry.get(tool_name)
+
         except Exception as e:
             return {
-                "status": "fail",
-                "output": None,
-                "error": f"Schema validation failed: {str(e)}"
+                "status": "fatal_error",
+                "error": str(e),
+                "step": step
             }
 
-        # -----------------------------
-        # 3. EXECUTE TOOL
-        # -----------------------------
+        # --------------------------------------------
+        # EXTRACT FUNCTION
+        # --------------------------------------------
+        func = tool.get("func")
+
+        if not callable(func):
+
+            return {
+                "status": "fatal_error",
+                "error": f"Tool not callable: {tool_name}",
+                "step": step
+            }
+
+        # --------------------------------------------
+        # EXECUTION
+        # --------------------------------------------
         try:
-            func = tool_meta["func"]
-            result = func(**args)
+
+            output = func(**args)
 
             return {
                 "status": "success",
-                "output": result,
-                "error": None
+                "output": output,
+                "step": step
+            }
+
+        except TypeError as e:
+
+            return {
+                "status": "fatal_error",
+                "error": f"Argument mismatch: {str(e)}",
+                "step": step
             }
 
         except Exception as e:
+
             return {
-                "status": "fail",
-                "output": None,
-                "error": f"Execution error: {str(e)}"
+                "status": "fatal_error",
+                "error": str(e),
+                "step": step
             }
-
-    # ----------------------------------------------------
-    # OPTIONAL: BATCH EXECUTION SUPPORT
-    # ----------------------------------------------------
-    def execute_plan(self, plan: Dict[str, Any]):
-
-        results = []
-
-        for step in plan.get("steps", []):
-            result = self.execute_step(step)
-            results.append({
-                "step": step,
-                "result": result
-            })
-
-        return results
