@@ -1,17 +1,8 @@
-"""
-NextMind Tool Schemas (v1 - strict contract layer)
-
-Design goals:
-- Single source of truth for ALL tool arguments
-- Must match Python function signatures EXACTLY
-- No naming ambiguity allowed
-"""
-
 from typing import Dict, Any, List
 
 
 # =====================================================
-# TOOL SCHEMA REGISTRY
+# TOOL SCHEMA REGISTRY (STRICT CONTRACT LAYER)
 # =====================================================
 
 TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
@@ -24,7 +15,11 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "filename": "str",
             "content": "str"
         },
-        "required": ["filename", "content"]
+        "required": ["filename", "content"],
+        "forbidden_values": {
+            "filename": [""],
+            "content": [None]
+        }
     },
 
     # -------------------------------------------------
@@ -34,7 +29,10 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "args": {
             "filename": "str"
         },
-        "required": ["filename"]
+        "required": ["filename"],
+        "forbidden_values": {
+            "filename": [""]
+        }
     },
 
     # -------------------------------------------------
@@ -44,13 +42,16 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "args": {
             "path": "str"
         },
-        "required": []
+        "required": [],
+        "forbidden_values": {
+            "path": [None]
+        }
     }
 }
 
 
 # =====================================================
-# VALIDATION HELPERS
+# BASIC HELPERS
 # =====================================================
 
 def is_valid_tool(tool_name: str) -> bool:
@@ -62,21 +63,25 @@ def get_schema(tool_name: str) -> Dict[str, Any] | None:
 
 
 def get_required_args(tool_name: str) -> List[str] | None:
+
     schema = TOOL_SCHEMAS.get(tool_name)
     if not schema:
         return None
+
     return schema.get("required", [])
 
 
 def get_allowed_args(tool_name: str) -> List[str] | None:
+
     schema = TOOL_SCHEMAS.get(tool_name)
     if not schema:
         return None
+
     return list(schema.get("args", {}).keys())
 
 
 # =====================================================
-# STRICT VALIDATION (CORE GUARANTEE)
+# STRICT VALIDATION (CORE GUARANTEE LAYER)
 # =====================================================
 
 def validate_tool_call(tool_name: str, args: dict) -> bool:
@@ -85,27 +90,46 @@ def validate_tool_call(tool_name: str, args: dict) -> bool:
         raise ValueError(f"Unknown tool: {tool_name}")
 
     schema = TOOL_SCHEMAS[tool_name]
+
     required = schema.get("required", [])
     allowed = set(schema.get("args", {}).keys())
+    forbidden = schema.get("forbidden_values", {})
 
     if not isinstance(args, dict):
         raise ValueError("Args must be a dict")
 
-    # Required args check
+    # -----------------------------
+    # REQUIRED CHECK
+    # -----------------------------
     for key in required:
         if key not in args:
             raise ValueError(f"Missing required argument: {key}")
 
-    # Reject unknown args (strict mode)
+    # -----------------------------
+    # UNKNOWN ARG REJECTION
+    # -----------------------------
     for key in args:
         if key not in allowed:
             raise ValueError(f"Unexpected argument: {key}")
+
+    # -----------------------------
+    # FORBIDDEN VALUE CHECK
+    # -----------------------------
+    for key, bad_values in forbidden.items():
+
+        if key not in args:
+            continue
+
+        if args[key] in bad_values:
+            raise ValueError(
+                f"Invalid value for {key}: {args[key]}"
+            )
 
     return True
 
 
 # =====================================================
-# PROMPT GENERATION (LLM CONTRACT ENFORCER)
+# PROMPT HELPER (FOR PLANNER)
 # =====================================================
 
 def get_tool_spec_for_prompt() -> str:
@@ -118,6 +142,7 @@ def get_tool_spec_for_prompt() -> str:
 
         args = spec.get("args", {})
         required = set(spec.get("required", []))
+        forbidden = spec.get("forbidden_values", {})
 
         if not args:
             lines.append("  args: NONE")
@@ -126,7 +151,12 @@ def get_tool_spec_for_prompt() -> str:
 
             for arg, arg_type in args.items():
                 req = "required" if arg in required else "optional"
-                lines.append(f"    - {arg} ({arg_type}, {req})")
+                forbidden_hint = ""
+
+                if arg in forbidden:
+                    forbidden_hint = f" (forbidden: {forbidden[arg]})"
+
+                lines.append(f"    - {arg} ({arg_type}, {req}){forbidden_hint}")
 
         lines.append("")
 
