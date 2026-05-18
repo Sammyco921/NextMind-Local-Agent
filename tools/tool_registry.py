@@ -1,69 +1,89 @@
-class ToolRegistry:
+import os
 
-    def __init__(self):
-        self._tools = {}
 
-    # ====================================================
-    # REGISTER TOOL
-    # ====================================================
+# ====================================================
+# WRITE FILE (STRICT + SAFE)
+# ====================================================
 
-    def register(self, name: str, func, description: str = "", schema: dict = None):
+def write_file(filename: str, content: str):
 
-        if not isinstance(name, str):
-            raise TypeError("Tool name must be a string")
+    if not isinstance(filename, str):
+        raise ValueError("filename must be a string")
 
-        if not callable(func):
-            raise TypeError("Tool function must be callable")
+    if not isinstance(content, str):
+        raise ValueError("content must be a string")
 
-        name = self._normalize(name)
+    filename = filename.strip()
 
-        self._tools[name] = {
-            "name": name,
-            "func": func,
-            "description": description,
-            "schema": schema or {}
-        }
+    if filename == "":
+        raise ValueError("filename cannot be empty")
 
-    # ====================================================
-    # GET TOOL
-    # ====================================================
+    # prevent accidental directory traversal weirdness
+    if ".." in filename:
+        raise ValueError("invalid filename path")
 
-    def get(self, name: str):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
 
-        name = self._normalize(name)
+    return {
+        "file": filename,
+        "status": "written",
+        "bytes": len(content)
+    }
 
-        if name not in self._tools:
-            raise KeyError(f"Tool not found: {name}")
 
-        return self._tools[name]
+# ====================================================
+# READ FILE (STRICT + SAFE)
+# ====================================================
 
-    # ====================================================
-    # CALL TOOL (SAFE EXECUTION INTERFACE)
-    # ====================================================
+def read_file(filename: str):
 
-    def call(self, name: str, args: dict):
+    if not isinstance(filename, str):
+        raise ValueError("filename must be a string")
 
-        if not isinstance(args, dict):
-            raise TypeError("Tool args must be dict")
+    filename = filename.strip()
 
-        tool = self.get(name)
+    if filename == "":
+        raise ValueError("filename cannot be empty")
 
-        func = tool["func"]
+    if ".." in filename:
+        raise ValueError("invalid filename path")
 
-        return func(**args)
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"File not found: {filename}")
 
-    # ====================================================
-    # LIST TOOLS
-    # ====================================================
+    with open(filename, "r", encoding="utf-8") as f:
+        content = f.read()
 
-    def list_tools(self):
+    return {
+        "file": filename,
+        "content": content,
+        "status": "read",
+        "bytes": len(content)
+    }
 
-        return list(self._tools.values())
 
-    # ====================================================
-    # TOOL NAME NORMALIZATION
-    # ====================================================
+# ====================================================
+# LIST DIRECTORY (STRICT + CLEAN OUTPUT)
+# ====================================================
 
-    def _normalize(self, name: str):
+def list_dir(path="."):
 
-        return str(name).strip().lower()
+    if not isinstance(path, str):
+        raise ValueError("path must be a string")
+
+    path = path.strip()
+
+    if path == "":
+        path = "."
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Path not found: {path}")
+
+    items = os.listdir(path)
+
+    return {
+        "path": path,
+        "items": sorted(items),
+        "count": len(items)
+    }
