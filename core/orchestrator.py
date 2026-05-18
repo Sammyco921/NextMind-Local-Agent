@@ -4,15 +4,15 @@ class Orchestrator:
         self,
         planner,
         executor,
-        critic,
         state_model,
+        logger,
         max_steps=10,
         max_failures=3
     ):
         self.planner = planner
         self.executor = executor
-        self.critic = critic
         self.state_model = state_model
+        self.logger = logger
 
         self.max_steps = max_steps
         self.max_failures = max_failures
@@ -27,7 +27,9 @@ class Orchestrator:
 
         failure_count = 0
         last_signature = None
-        repeated_count = 0
+        repeat_count = 0
+
+        self.logger.info("Task started", {"goal": goal})
 
         try:
 
@@ -38,64 +40,23 @@ class Orchestrator:
                 # ----------------------------------------
                 try:
                     plan = self.planner.create_plan(goal, state)
-
                 except Exception as e:
-                    return self._fatal(
-                        state,
-                        f"Planner failure: {e}"
-                    )
+                    self.logger.error("Planner crash", {"error": str(e)})
+                    return self._fatal(state, f"Planner failure: {e}")
 
-                # ----------------------------------------
-                # NORMALIZE PLAN
-                # ----------------------------------------
-                if isinstance(plan, list):
-                    plan = {"steps": plan}
-
-                if not isinstance(plan, dict):
-                    return self._fatal(
-                        state,
-                        "Planner output must be dict"
-                    )
-
-                if "steps" not in plan:
-                    return self._fatal(
-                        state,
-                        "Planner missing 'steps'"
-                    )
+                if not isinstance(plan, dict) or "steps" not in plan:
+                    self.logger.error("Invalid planner output", plan)
+                    return self._fatal(state, "Planner missing steps")
 
                 steps = plan["steps"]
 
-                if not isinstance(steps, list):
-                    return self._fatal(
-                        state,
-                        "'steps' must be a list"
-                    )
+                if not steps:
+                    return self._fatal(state, "Planner returned empty steps")
 
-                if len(steps) == 0:
-                    return self._fatal(
-                        state,
-                        "Planner returned empty steps"
-                    )
-
-                # ----------------------------------------
-                # GET FIRST STEP
-                # ----------------------------------------
                 step = steps[0]
 
-                if not isinstance(step, dict):
-                    return self._fatal(
-                        state,
-                        "Step must be dict"
-                    )
-
-                # ----------------------------------------
-                # NORMALIZE STEP
-                # ----------------------------------------
                 step = {
-                    "id": step.get(
-                        "id",
-                        len(state["history"])
-                    ),
+                    "id": step.get("id", len(state["history"])),
                     "tool": step.get("tool"),
                     "args": step.get("args", {})
                 }
@@ -103,75 +64,27 @@ class Orchestrator:
                 # ----------------------------------------
                 # LOOP DETECTION
                 # ----------------------------------------
-                signature = (
-                    step["tool"],
-                    str(step["args"])
-                )
+                signature = (step["tool"], str(step["args"]))
 
                 if signature == last_signature:
-                    repeated_count += 1
+                    repeat_count += 1
                 else:
-                    repeated_count = 0
+                    repeat_count = 0
 
                 last_signature = signature
 
-                if repeated_count >= 2:
-
-                    return self._fail(
-                        state,
-                        "Repeated identical steps detected",
-                        {"step": step}
-                    )
-
-                # ----------------------------------------
-                # SHOW STEP
-                # ----------------------------------------
-                print("\n[Planner Step]")
-                print(step)
+                if repeat_count >= 2:
+                    self.logger.warning("Repeated step detected", step)
+                    return self._fail(state, "Repeated identical steps detected", {"step": step})
 
                 # ----------------------------------------
                 # EXECUTION
                 # ----------------------------------------
-                try:
-                    result = self.executor.run(step)
+                self.logger.log_step(step)
 
-                except Exception as e:
-                    return self._fatal(
-                        state,
-                        f"Executor crash: {e}"
-                    )
+                result = self.executor.run(step)
 
-                print("\n[Execution Result]")
-                print(result)
-
-                # ----------------------------------------
-                # CRITIC VALIDATION
-                # ----------------------------------------
-                try:
-                    critique = self.critic.evaluate_step(
-                        step,
-                        result
-                    )
-
-                except Exception as e:
-                    return self._fatal(
-                        state,
-                        f"Critic crash: {e}"
-                    )
-
-                if critique.get("status") == "fail":
-
-                    result = {
-                        "status": "fail",
-                        "error": critique.get("reason"),
-                        "fix": critique.get(
-                            "fix_suggestion"
-                        ),
-                        "step": step
-                    }
-
-                    print("\n[Critic Result]")
-                    print(result)
+                self.logger.log_result(result)
 
                 # ----------------------------------------
                 # STORE HISTORY
@@ -181,63 +94,52 @@ class Orchestrator:
                     "result": result
                 })
 
-                state["steps_executed"] = len(
-                    state["history"]
-                )
+                state["steps_executed"] = len(state["history"])
 
                 # ----------------------------------------
                 # FAILURE HANDLING
                 # ----------------------------------------
-                if (
-                    not isinstance(result, dict)
-                    or result.get("status") != "success"
-                ):
+                status = result.get("status")
 
+                if status == "fatal_error":
+                    self.logger.critical("Fatal execution error", result)
+                    return self._fatal(state, result.get("error"))
+
+                if status == "fail":
                     failure_count += 1
+                    self.logger.warning("Tool failure", result)
 
                     if failure_count >= self.max_failures:
-
-                        return self._fail(
-                            state,
-                            "Too many execution failures",
-                            result
-                        )
+                        return self._fail(state, "Too many execution failures", result)
 
                     continue
 
-                # ----------------------------------------
-                # RESET FAILURES
-                # ----------------------------------------
+                # success resets failure counter
                 failure_count = 0
 
                 # ----------------------------------------
                 # SUCCESS CHECK
                 # ----------------------------------------
                 if self._goal_complete(goal, state):
+                    self.logger.info("Goal completed", {"steps": state["steps_executed"]})
 
                     return {
                         "status": "success",
                         "goal": goal,
-                        "steps_executed": state[
-                            "steps_executed"
-                        ],
+                        "steps_executed": state["steps_executed"],
                         "history": state["history"]
                     }
 
             # --------------------------------------------
-            # MAX STEPS EXIT
+            # MAX STEPS HIT
             # --------------------------------------------
-            return self._fail(
-                state,
-                "Max steps exceeded"
-            )
+            self.logger.warning("Max steps exceeded", state)
+
+            return self._fail(state, "Max steps exceeded")
 
         except Exception as e:
-
-            return self._fatal(
-                state,
-                str(e)
-            )
+            self.logger.critical("Orchestrator crash", {"error": str(e)})
+            return self._fatal(state, str(e))
 
     # ====================================================
     # GOAL CHECK
@@ -250,9 +152,6 @@ class Orchestrator:
 
         last = state["history"][-1]["result"]
 
-        if not isinstance(last, dict):
-            return False
-
         if last.get("status") != "success":
             return False
 
@@ -264,22 +163,13 @@ class Orchestrator:
         goal_lower = goal.lower()
 
         if "read" in goal_lower:
-            return (
-                isinstance(output, dict)
-                and output.get("content") is not None
-            )
+            return isinstance(output, dict) and "content" in output
 
-        if (
-            "write" in goal_lower
-            or "create" in goal_lower
-        ):
+        if "write" in goal_lower or "create" in goal_lower:
             return True
 
         if "list" in goal_lower:
-            return (
-                isinstance(output, dict)
-                and "items" in output
-            )
+            return isinstance(output, dict) and "items" in output
 
         return False
 
@@ -289,25 +179,25 @@ class Orchestrator:
 
     def _fail(self, state, reason, details=None):
 
+        self.logger.warning("Task failed", {"reason": reason, "details": details})
+
         return {
             "status": "fail",
             "goal": state["goal"],
             "reason": reason,
             "details": details,
-            "steps_executed": len(
-                state["history"]
-            ),
+            "steps_executed": len(state["history"]),
             "history": state["history"]
         }
 
     def _fatal(self, state, error):
 
+        self.logger.critical("Task fatal error", {"error": error})
+
         return {
             "status": "fatal_error",
             "error": error,
             "goal": state.get("goal"),
-            "steps_executed": len(
-                state.get("history", [])
-            ),
+            "steps_executed": len(state.get("history", [])),
             "history": state.get("history", [])
         }
