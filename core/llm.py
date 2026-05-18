@@ -1,118 +1,70 @@
-import re
-import json
 import requests
 
 
-# ====================================================
-# JSON EXTRACTION LAYER (ROBUST)
-# ====================================================
+class LLM:
 
-def _extract_json(text: str) -> str:
-    """
-    Extract JSON from messy LLM outputs.
+    def __init__(
+        self,
+        model="llama3.2:latest",
+        base_url="http://localhost:11434",
+        timeout=60
+    ):
+        self.model = model
+        self.url = f"{base_url}/v1/chat/completions"
+        self.timeout = timeout
 
-    Handles:
-    - ```json blocks
-    - ``` generic blocks
-    - embedded explanations
-    - partial JSON fallback
-    """
+    # ====================================================
+    # CORE GENERATION
+    # ====================================================
 
-    if not text:
-        raise ValueError("Empty LLM response")
+    def generate(self, prompt, temperature=0.2):
 
-    text = text.strip()
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": temperature,
+            "stream": False
+        }
 
-    # -----------------------------
-    # Case 1: ```json ... ```
-    # -----------------------------
-    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+        try:
+            response = requests.post(
+                self.url,
+                json=payload,
+                timeout=self.timeout
+            )
 
-    # -----------------------------
-    # Case 2: ``` ... ```
-    # -----------------------------
-    match = re.search(r"```(.*?)```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+            response.raise_for_status()
 
-    # -----------------------------
-    # Case 3: best-effort JSON block
-    # (take last valid-looking object)
-    # -----------------------------
-    candidates = re.findall(r"\{.*?\}", text, re.DOTALL)
-    if candidates:
-        return candidates[-1].strip()
+            data = response.json()
 
-    return text
+            return self._extract_content(data)
 
+        except requests.exceptions.Timeout:
+            raise RuntimeError("LLM timeout: model took too long to respond")
 
-# ====================================================
-# MAIN LLM CALL (OLLAMA)
-# ====================================================
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"LLM request failed: {e}")
 
-def call_llm(prompt: str) -> str:
-    """
-    Calls local Ollama model and returns CLEAN JSON string.
-    """
+        except Exception as e:
+            raise RuntimeError(f"LLM parsing failed: {e}")
 
-    raw_output = _raw_llm_call(prompt)
+    # ====================================================
+    # SAFE RESPONSE EXTRACTION
+    # ====================================================
 
-    cleaned = _extract_json(raw_output)
+    def _extract_content(self, data):
 
-    # -----------------------------
-    # HARD VALIDATION CHECK
-    # -----------------------------
-    try:
-        json.loads(cleaned)
-    except Exception as e:
-        raise ValueError(
-            "LLM did not return valid JSON after cleanup.\n"
-            f"Error: {str(e)}\n\nRAW OUTPUT:\n{raw_output}"
-        )
-
-    return cleaned
-
-
-# ====================================================
-# OLLAMA BACKEND
-# ====================================================
-
-def _raw_llm_call(prompt: str) -> str:
-
-    try:
-
-        response = requests.post(
-
-            "http://localhost:11434/api/chat",
-
-            json={
-
-                "model": "llama3.2:latest",
-
-                "messages": [
-
-                    {"role": "system", "content": "Return ONLY valid JSON."},
-
-                    {"role": "user", "content": prompt}
-
-                ],
-
-                "stream": False
-
-            },
-
-            timeout=60
-
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        return data["message"]["content"]
-
-    except Exception as e:
-
-        raise RuntimeError(f"Ollama request failed: {str(e)}")
+        try:
+            return (
+                data
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+        except Exception:
+            raise RuntimeError(f"Malformed LLM response: {data}")
