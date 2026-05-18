@@ -7,17 +7,22 @@ class LLM:
         self,
         model="llama3.2:latest",
         base_url="http://localhost:11434",
-        timeout=60
+        timeout=60,
+        max_retries=1
     ):
         self.model = model
         self.url = f"{base_url}/v1/chat/completions"
         self.timeout = timeout
+        self.max_retries = max_retries
 
     # ====================================================
-    # CORE GENERATION
+    # MAIN GENERATION
     # ====================================================
 
     def generate(self, prompt, temperature=0.2):
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Prompt must be a non-empty string")
 
         payload = {
             "model": self.model,
@@ -31,30 +36,41 @@ class LLM:
             "stream": False
         }
 
-        try:
-            response = requests.post(
-                self.url,
-                json=payload,
-                timeout=self.timeout
-            )
+        last_error = None
 
-            response.raise_for_status()
+        for attempt in range(self.max_retries + 1):
 
-            data = response.json()
+            try:
+                response = requests.post(
+                    self.url,
+                    json=payload,
+                    timeout=self.timeout
+                )
 
-            return self._extract_content(data)
+                response.raise_for_status()
 
-        except requests.exceptions.Timeout:
-            raise RuntimeError("LLM timeout: model took too long to respond")
+                data = response.json()
+                content = self._extract_content(data)
 
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"LLM request failed: {e}")
+                if content is None or not isinstance(content, str):
+                    raise ValueError("Empty or invalid LLM response")
 
-        except Exception as e:
-            raise RuntimeError(f"LLM parsing failed: {e}")
+                return content.strip()
+
+            except requests.exceptions.Timeout as e:
+                last_error = f"LLM timeout: {e}"
+
+            except requests.exceptions.RequestException as e:
+                last_error = f"LLM request error: {e}"
+
+            except Exception as e:
+                last_error = f"LLM processing error: {e}"
+
+        # If all retries fail
+        raise RuntimeError(last_error or "Unknown LLM failure")
 
     # ====================================================
-    # SAFE RESPONSE EXTRACTION
+    # RESPONSE EXTRACTION
     # ====================================================
 
     def _extract_content(self, data):
@@ -64,7 +80,7 @@ class LLM:
                 data
                 .get("choices", [{}])[0]
                 .get("message", {})
-                .get("content", "")
+                .get("content", None)
             )
-        except Exception:
-            raise RuntimeError(f"Malformed LLM response: {data}")
+        except Exception as e:
+            raise RuntimeError(f"Malformed LLM response structure: {e}")
