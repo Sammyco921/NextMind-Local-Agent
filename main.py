@@ -1,45 +1,98 @@
+from core.llm import LLM
+from core.planner import Planner
+from core.executor import Executor
+from core.critic import Critic
 from core.orchestrator import Orchestrator
+from tools.tool_registry import ToolRegistry
+from tools.tool_schemas import TOOL_SCHEMAS
+from state.state_model import StateModel
+
+from tools.file_tools import write_file, read_file, list_dir
 
 
-def print_banner():
-    print("\n" + "=" * 60)
-    print("           NEXTMIND - LOCAL AGENT SYSTEM")
-    print("=" * 60 + "\n")
+# ====================================================
+# BUILD SYSTEM
+# ====================================================
 
+def build_system():
+
+    # ----------------------------
+    # REGISTRY
+    # ----------------------------
+    registry = ToolRegistry()
+
+    registry.register("write_file", write_file)
+    registry.register("read_file", read_file)
+    registry.register("list_dir", list_dir)
+
+    # ----------------------------
+    # CORE COMPONENTS
+    # ----------------------------
+    llm = LLM()
+
+    planner = Planner(
+        llm=llm,
+        tool_schemas=TOOL_SCHEMAS
+    )
+
+    critic = Critic(valid_tools=[
+        "write_file",
+        "read_file",
+        "list_dir"
+    ])
+
+    executor = Executor(
+        registry=registry,
+        critic=critic
+    )
+
+    state_model = StateModel()
+
+    # ----------------------------
+    # ORCHESTRATOR
+    # ----------------------------
+
+    system = Orchestrator(
+        planner=planner,
+        executor=executor,
+        critic=critic,
+        state_model=state_model,
+        max_steps=10,
+        max_failures=3
+    )
+
+    return system
+
+
+# ====================================================
+# CLI LOOP
+# ====================================================
 
 def main():
-    print_banner()
 
-    orchestrator = Orchestrator()
+    system = build_system()
+
+    print("\n=== NextMind v0.3 ===\n")
 
     while True:
-        try:
-            goal = input("\nEnter goal (or 'exit'): ").strip()
 
-            if goal.lower() in ["exit", "quit"]:
-                print("\nShutting down NextMind.")
-                break
+        goal = input("Enter goal (or 'exit'): ")
 
-            if not goal:
-                print("Please enter a valid goal.")
-                continue
-
-            print("\n--- Running Task ---\n")
-
-            result = orchestrator.run(goal)
-
-            print("\n--- FINAL RESULT ---\n")
-            print(result)
-
-            print("\n" + "-" * 60 + "\n")
-
-        except KeyboardInterrupt:
-            print("\n\nInterrupted. Exiting NextMind.")
+        if goal.strip().lower() == "exit":
             break
 
-        except Exception as e:
-            print(f"\n[ERROR] {str(e)}")
+        print("\n--- Running task ---\n")
 
+        result = system.run(goal)
+
+        print("\n--- FINAL RESULT ---\n")
+        print(result)
+        print("\n" + "-" * 60 + "\n")
+
+
+# ====================================================
+# ENTRY POINT
+# ====================================================
 
 if __name__ == "__main__":
     main()
