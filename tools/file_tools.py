@@ -2,16 +2,25 @@ import os
 
 
 # ====================================================
-# WRITE FILE
+# WRITE FILE (STRICT + SAFE)
 # ====================================================
 
 def write_file(filename: str, content: str):
 
-    if not isinstance(filename, str) or not filename:
-        raise ValueError("filename must be a non-empty string")
+    if not isinstance(filename, str):
+        raise ValueError("filename must be a string")
 
     if not isinstance(content, str):
         raise ValueError("content must be a string")
+
+    filename = filename.strip()
+
+    if filename == "":
+        raise ValueError("filename cannot be empty")
+
+    # prevent accidental directory traversal weirdness
+    if ".." in filename:
+        raise ValueError("invalid filename path")
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
@@ -24,13 +33,21 @@ def write_file(filename: str, content: str):
 
 
 # ====================================================
-# READ FILE
+# READ FILE (STRICT + SAFE)
 # ====================================================
 
 def read_file(filename: str):
 
-    if not isinstance(filename, str) or not filename:
-        raise ValueError("filename must be a non-empty string")
+    if not isinstance(filename, str):
+        raise ValueError("filename must be a string")
+
+    filename = filename.strip()
+
+    if filename == "":
+        raise ValueError("filename cannot be empty")
+
+    if ".." in filename:
+        raise ValueError("invalid filename path")
 
     if not os.path.exists(filename):
         raise FileNotFoundError(f"File not found: {filename}")
@@ -47,13 +64,18 @@ def read_file(filename: str):
 
 
 # ====================================================
-# LIST DIRECTORY
+# LIST DIRECTORY (STRICT + CLEAN OUTPUT)
 # ====================================================
 
 def list_dir(path="."):
 
     if not isinstance(path, str):
         raise ValueError("path must be a string")
+
+    path = path.strip()
+
+    if path == "":
+        path = "."
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Path not found: {path}")
@@ -62,6 +84,6 @@ def list_dir(path="."):
 
     return {
         "path": path,
-        "items": items,
+        "items": sorted(items),
         "count": len(items)
     }
