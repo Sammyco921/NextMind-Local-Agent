@@ -1,53 +1,73 @@
-"""
-NextMind Critic (v0)
-
-Design principle:
-- NO LLM
-- NO subjective evaluation
-- ONLY structural + execution validation
-
-The critic answers one question:
-→ Did the tool call succeed or fail?
-"""
-
-from typing import Dict, Any
-
-
 class Critic:
 
-    def evaluate_step(
-        self,
-        step: Dict[str, Any],
-        execution_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def __init__(self, valid_tools=None):
+        self.valid_tools = set(valid_tools or [])
 
-        """
-        Deterministic evaluation of tool execution.
-        """
+    def evaluate_step(self, step: dict, result: dict):
 
-        step_id = step.get("id")
+        tool = step.get("tool")
 
-        status = execution_result.get("status")
-        error = execution_result.get("error")
-
-        # ----------------------------------------------------
-        # Success cases (strict + fallback safe)
-        # ----------------------------------------------------
-
-        if status == "success" and error is None:
+        # -----------------------------------------
+        # HARD FAILURE ONLY (executor crashed)
+        # -----------------------------------------
+        if not isinstance(result, dict):
             return {
-                "status": "pass",
-                "step_id": step_id,
-                "reason": None
+                "status": "fail",
+                "reason": "Non-dict executor output",
+                "fix_suggestion": "Fix executor return contract"
             }
 
-        # ----------------------------------------------------
-        # Failure / ambiguous cases
-        # ----------------------------------------------------
+        if result.get("status") == "fatal_error":
+            return {
+                "status": "fail",
+                "reason": result.get("error", "Executor crashed"),
+                "fix_suggestion": self._suggest_fix(tool, result)
+            }
+
+        if result.get("status") != "success":
+            return {
+                "status": "fail",
+                "reason": result.get("error", "Unknown failure"),
+                "fix_suggestion": self._suggest_fix(tool, result)
+            }
+
+        output = result.get("output")
+
+        # -----------------------------------------
+        # TOOL VALIDATION
+        # -----------------------------------------
+        if tool == "write_file":
+            if not isinstance(output, dict) or "file" not in output:
+                return self._fail("write_file output invalid")
+
+        if tool == "read_file":
+            if not isinstance(output, dict) or "content" not in output:
+                return self._fail("read_file output invalid")
+
+        if tool == "list_dir":
+            if not isinstance(output, dict) or "items" not in output:
+                return self._fail("list_dir output invalid")
 
         return {
-            "status": "fail",
-            "step_id": step_id,
-            "reason": error or "Execution did not succeed",
-            "fix_suggestion": "Check tool arguments, tool implementation, and executor mapping."
+            "status": "pass",
+            "reason": None
         }
+
+    def _fail(self, msg):
+        return {
+            "status": "fail",
+            "reason": msg,
+            "fix_suggestion": "Fix tool implementation contract"
+        }
+
+    def _suggest_fix(self, tool, result):
+
+        err = str(result.get("error", ""))
+
+        if "argument" in err.lower():
+            return "Fix planner args schema mismatch"
+
+        if "unknown tool" in err.lower():
+            return "Register tool in registry"
+
+        return "Inspect executor + tool contract"
