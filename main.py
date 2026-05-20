@@ -1,61 +1,93 @@
-from core.planner import Planner
-from core.executor import Executor
+# main.py
+#
+# NextMind v0.7 — Entry Point
+#
+# Minimal CLI runner for the deterministic pipeline system.
+#
+# Responsibilities:
+#   - Accept user input
+#   - Invoke Orchestrator
+#   - Print structured result
+#
+# Non-responsibilities:
+#   - No planning logic
+#   - No execution logic
+#   - No pipeline awareness
+
+
 from core.orchestrator import Orchestrator
-
+from core.planner import Planner
 from tools.tool_registry import ToolRegistry
-from tools.write_file import write_file
-from tools.read_file import read_file
-from tools.list_dir import list_dir
 
 
-def build_system():
-
-    # ====================================================
-    # TOOL REGISTRY (single source of truth)
-    # ====================================================
+def build_registry() -> ToolRegistry:
+    """
+    Register all available tools here.
+    In production, this can be replaced with auto-registration.
+    """
     registry = ToolRegistry()
 
+    # Example tools (replace with your real implementations)
     registry.register("write_file", write_file)
     registry.register("read_file", read_file)
     registry.register("list_dir", list_dir)
 
-    # ====================================================
-    # CORE COMPONENTS
-    # ====================================================
+    return registry
 
-    planner = Planner()
 
-    executor = Executor(registry)
+# -----------------------------------------------------
+# PLACEHOLDER TOOLS (replace with real implementations)
+# -----------------------------------------------------
 
-    orchestrator = Orchestrator(
-        planner=planner,
-        executor=executor
-    )
+def write_file(filename: str, content: str):
+    with open(filename, "w") as f:
+        f.write(content)
+    return {"file": filename, "bytes": len(content)}
 
-    return orchestrator
 
+def read_file(filename: str):
+    with open(filename, "r") as f:
+        return {"file": filename, "content": f.read()}
+
+
+def list_dir(path: str = "."):
+    import os
+    return {
+        "path": path,
+        "items": os.listdir(path)
+    }
+
+
+# -----------------------------------------------------
+# MAIN LOOP
+# -----------------------------------------------------
 
 def main():
+    print("=== NextMind v0.7 (deterministic pipeline) ===\n")
 
-    system = build_system()
-
-    print("=== NextMind v0.6 (stable runtime) ===\n")
+    registry = build_registry()
+    planner = Planner()
+    orchestrator = Orchestrator(planner=planner, registry=registry)
 
     while True:
+        try:
+            goal = input("Enter goal (or 'exit'): ").strip()
 
-        goal = input("Enter goal (or 'exit'): ")
+            if goal.lower() == "exit":
+                break
 
-        if goal.strip().lower() == "exit":
+            result = orchestrator.run(goal)
+
+            print("\n--- RESULT ---")
+            print(result)
+            print("\n" + "-" * 60 + "\n")
+
+        except KeyboardInterrupt:
+            print("\nExiting...")
             break
 
-        print("\n--- Running task ---\n")
-
-        result = system.run(goal)
-
-        print("\n--- FINAL RESULT ---\n")
-        print(result)
-
-        print("\n------------------------------------------------------------\n")
+        except Exception as e:
+            print(f"\nFatal error: {e}\n")
 
 
 if __name__ == "__main__":
