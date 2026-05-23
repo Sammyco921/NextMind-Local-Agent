@@ -1,90 +1,189 @@
-from tools.tool_registry import build_registry
-from core.planner import Planner
-from core.orchestrator import Orchestrator
-from core.validator import Validator
-from tests.test_harness import TestHarness
+import os
+import sys
+
+# =====================================================
+# BOOTSTRAP
+# =====================================================
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+# =====================================================
+# IMPORTS
+# =====================================================
+
+from core.dag_planner import DAGPlanner
+from core.dag_validator import DAGValidator
+from core.executor import Executor
+from tools.tool_registry import ToolRegistry
+
+from tools.write_file import write_file
+from tools.read_file import read_file
+from tools.list_dir import list_dir
 
 
-# =========================================================
-# CLI MODE
-# =========================================================
+# =====================================================
+# TOOL REGISTRATION
+# =====================================================
 
-def run_cli(orchestrator: Orchestrator):
+def build_registry() -> ToolRegistry:
 
-    print("=== NextMind v0.9 (Deterministic Kernel) ===\n")
+    registry = ToolRegistry()
 
-    while True:
+    # -------------------------------------------------
+    # WRITE FILE
+    # -------------------------------------------------
 
-        try:
-
-            goal = input("Enter goal (or 'exit'): ").strip()
-
-            if goal.lower() == "exit":
-                print("Exiting...")
-                break
-
-            result = orchestrator.run(goal)
-
-            print("\n--- RESULT ---")
-            print(result)
-            print("\n" + "-" * 60 + "\n")
-
-        except KeyboardInterrupt:
-            print("\nExiting...")
-            break
-
-        except Exception as e:
-            print(f"\nFatal error: {e}\n")
-
-
-# =========================================================
-# TEST MODE
-# =========================================================
-
-def run_tests(registry, planner, validator):
-
-    print("=== Running v0.9 Test Harness ===\n")
-
-    harness = TestHarness(
-        registry=registry,
-        planner=planner
+    registry.register(
+        name="write_file",
+        func=write_file,
+        input_schema={
+            "filename": str,
+            "content": str,
+        },
+        description="Write content to a file.",
+        risk="low",
     )
 
-    summary = harness.run_default_suite()
+    # -------------------------------------------------
+    # READ FILE
+    # -------------------------------------------------
 
-    harness.print_summary(summary)
+    registry.register(
+        name="read_file",
+        func=read_file,
+        input_schema={
+            "filename": str,
+        },
+        description="Read file contents.",
+        risk="low",
+    )
+
+    # -------------------------------------------------
+    # LIST DIRECTORY
+    # -------------------------------------------------
+
+    registry.register(
+        name="list_dir",
+        func=list_dir,
+        input_schema={},
+        description="List files in working directory.",
+        risk="low",
+    )
+
+    return registry
 
 
-# =========================================================
-# ENTRYPOINT
-# =========================================================
+# =====================================================
+# DAG NORMALIZER
+# =====================================================
+
+def normalize_dag(dag):
+
+    steps = []
+
+    for node in dag.nodes:
+
+        steps.append({
+            "_id": node.node_id,
+            "tool": node.tool,
+            "args": node.args or {},
+            "depends_on": node.depends_on or [],
+        })
+
+    return steps
+
+
+# =====================================================
+# MAIN LOOP
+# =====================================================
 
 def main():
 
+    print("\n=== NextMind v1 ===")
+
+    # -------------------------------------------------
+    # SYSTEM INIT
+    # -------------------------------------------------
+
     registry = build_registry()
-    planner = Planner()
-    validator = Validator(registry)
-    orchestrator = Orchestrator(
-        planner=planner,
-        registry=registry,
-        validator=validator
-    )
 
-    print("Select mode:")
-    print("1. CLI")
-    print("2. TEST SUITE\n")
+    planner = DAGPlanner()
 
-    mode = input("Mode (1/2): ").strip()
+    validator = DAGValidator(registry)
 
-    if mode == "1":
-        run_cli(orchestrator)
+    executor = Executor(registry)
 
-    elif mode == "2":
-        run_tests(registry, planner, validator)
+    # -------------------------------------------------
+    # REPL LOOP
+    # -------------------------------------------------
 
-    else:
-        print("Invalid mode")
+    while True:
 
+        goal_input = input("\nEnter goal (or 'exit'): ").strip()
+
+        if goal_input.lower() == "exit":
+            print("Exiting...")
+            break
+
+        try:
+
+            print("\n--- PIPELINE START ---")
+
+            # =================================================
+            # PLAN
+            # =================================================
+
+            dag = planner.plan(goal_input)
+
+            # =================================================
+            # VALIDATE
+            # =================================================
+
+            validation = validator.validate(dag)
+
+            if validation["status"] != "valid":
+
+                print("\n--- VALIDATION FAILED ---")
+
+                for err in validation["errors"]:
+                    print(f" - {err}")
+
+                continue
+
+            # =================================================
+            # NORMALIZE
+            # =================================================
+
+            steps = normalize_dag(dag)
+
+            # =================================================
+            # EXECUTE
+            # =================================================
+
+            result = executor.execute(goal_input, steps)
+
+            # =================================================
+            # OUTPUT
+            # =================================================
+
+            print("\n--- RESULT ---")
+
+            print(result.to_dict())
+
+        except Exception as e:
+
+            print("\n--- FATAL ERROR ---")
+
+            print(type(e).__name__)
+            print(str(e))
+
+
+# =====================================================
+# ENTRYPOINT
+# =====================================================
 
 if __name__ == "__main__":
     main()
