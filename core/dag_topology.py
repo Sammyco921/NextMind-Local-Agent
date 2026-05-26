@@ -1,6 +1,6 @@
 # core/dag_topology.py
 #
-# Shared deterministic DAG topological ordering (v1.9).
+# Shared deterministic DAG topological ordering (v1.2).
 
 from __future__ import annotations
 
