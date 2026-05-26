@@ -1,6 +1,6 @@
 # core/dag_builder.py
 #
-# v1.9.1 truth layer: dependency inference, graph validation, DAG construction.
+# v1.2 truth layer: dependency inference, graph validation, DAG construction.
 #
 # INVARIANT: DAGBuilder is a pure function — steps → DAG (no state, no memory).
 # No component may depend on previous executions of build().
