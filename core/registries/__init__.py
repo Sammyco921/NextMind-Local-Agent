@@ -1,6 +1,6 @@
 # core/registries/__init__.py
 """
-NextMind v2.0 Registry Layer
+NextMind v1.2 Registry Layer
 
 Registry-driven component management for transforms, actions, tools, and validation rules.
 All components are registered centrally and discovered by capability, not by name.
