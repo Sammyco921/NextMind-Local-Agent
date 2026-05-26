@@ -1,6 +1,6 @@
 # core/registries/base.py
 """
-Base registry interface for all NextMind v2.0 component registries.
+Base registry interface for all NextMind v1.2 component registries.
 
 All registries must:
 - Be deterministic (keys() returns sorted list)
