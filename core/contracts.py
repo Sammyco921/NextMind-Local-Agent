@@ -1,6 +1,6 @@
 # core/contracts.py
 """
-NextMind v2.0 Execution Contract Layer
+NextMind v1.2 Execution Contract Layer
 
 Enforces structural and capability contracts before execution.
 No execution is allowed without passing contract validation.
