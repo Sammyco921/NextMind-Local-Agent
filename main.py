@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NextMind v1.9.1 — Intent → Normalization → Parsing → DAG → Validation → Execution
+NextMind v1.2
 """
 
 from __future__ import annotations
